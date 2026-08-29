@@ -140,8 +140,6 @@ js/
   tickets.js        custos, conferência e balanço
   app.js            interface
   retro-ui.js       a aba Retrospectiva (separada para não inchar o app.js)
-netlify/edge-functions/
-  loterias.js       ponte para a API oficial da Caixa (resolve o CORS)
 supabase/
   schema.sql        só é necessário se você ligar a sincronização em nuvem
 ```
@@ -150,76 +148,67 @@ supabase/
 
 ## De onde vêm os resultados
 
-### A lição que custou caro
-
-A primeira versão usava um espelho público em JSON que se anunciava como
-"atualizado todos os dias com Cron Job via GitHub Actions". Era verdade um dia.
-
-Quando fomos usar de verdade, ele estava parado no **concurso 3246** da
-Lotofácil, enquanto a Caixa já ia no **3773** — mais de 500 concursos e quase
-dois anos de atraso. Pior: **o sistema consumiu esse dado velho sem reclamar uma
-única vez**. A falha grave não foi a fonte morrer; foi ninguém perceber.
-
-Duas correções vieram daí.
-
-### 1. A fonte principal passou a ser a Caixa
-
-A API oficial (`servicebus2.caixa.gov.br/portaldeloterias/api/…`) não envia o
-cabeçalho `Access-Control-Allow-Origin`, então o navegador bloqueia a resposta
-antes do JavaScript ler qualquer coisa. Não é limitação do nosso código, é
-política do servidor deles — a única saída é buscar o dado do lado do servidor.
-
-É o que faz `netlify/edge-functions/loterias.js`.
-
-**Por que Edge Function e não Function comum:** no plano free do Netlify, as
-Functions comuns consomem do bolo de 300 créditos/mês que também paga banda e
-deploys — e quando esse bolo acaba, **o site sai do ar**. Edge Functions têm
-1.000.000 de invocações/mês em pool separado. O uso real aqui é da ordem de
-100/mês.
-
-Como publicar:
-
-1. Suba a pasta inteira para o GitHub (o `netlify.toml` e a pasta
-   `netlify/edge-functions/` precisam ir junto).
-2. No Netlify, conecte o repositório. Não há comando de build; o diretório de
-   publicação é a raiz.
-3. Publicado, teste em **Configurações → De onde vêm os resultados →
-   Testar conexão**. Ele diz em que concurso a Caixa está agora.
-
-Rodando local com `python -m http.server`, o caminho `/api/loterias` não existe
-— a Edge Function só roda no Netlify (ou com `netlify dev`). Nesse caso, aponte
-o campo para o seu site publicado:
-`https://seusite.netlify.app/api/loterias`.
-
-Rotas da função:
+A fonte é a **API oficial da Caixa**, chamada **direto pelo navegador**. Sem
+proxy, sem espelho, sem servidor no meio.
 
 ```
-/api/loterias/lotofacil                 → último concurso
-/api/loterias/lotofacil/3773            → um concurso específico
-/api/loterias/lotofacil/lote?de=&ate=   → um intervalo (máx. 60 por chamada)
+https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil
 ```
 
-Ela só aceita modalidades de uma lista branca — sem isso, seria um proxy aberto
-e qualquer um poderia usar o seu domínio para buscar na Caixa.
+Funciona publicado e funciona no `python -m http.server` local, porque não
+depende de nada além do navegador de quem usa.
 
-### 2. O sistema passou a desconfiar da própria base
+### Duas suposições erradas que custaram duas arquiteturas
 
-Toda leitura da base agora passa por `diagnosticarBase()`. Se o último concurso
-for velho demais para a cadência da modalidade, aparece um aviso no Painel
-dizendo para **não confiar nas conferências** até resolver.
+Vale registrar, porque a lição é mais valiosa que o código.
 
-E dado sem data não recebe atestado de saúde: se a base veio de uma fonte que
-não informa a data dos concursos (o espelho JSON é assim), o sistema diz que
-não consegue verificar, em vez de assumir que está tudo bem. Foi exatamente
-essa suposição que deixou 20 meses passarem.
+**Erro 1 — "a API da Caixa não envia CORS".** Foi afirmado de memória, nunca
+verificado, e virou a premissa de tudo. Por causa dele o sistema nasceu
+consumindo um espelho público em JSON que se anunciava atualizado diariamente
+e estava **parado no concurso 3246 enquanto a Caixa ia no 3773** — 527
+concursos, quase dois anos. E o sistema consumiu isso sem reclamar uma vez.
 
-### Reserva e plano B
+**Erro 2 — "então precisamos de um proxy".** Construiu-se uma Edge Function no
+Netlify para "resolver o CORS". Ela levou **403**.
 
-Se o proxy não responder, o sistema cai no espelho JSON e avisa. E
-**Configurações → Import manual** aceita qualquer arquivo que tenha, em cada
-linha, o número do concurso seguido das dezenas — que é o formato dos arquivos
-de resultado que circulam por aí, incluindo CSV exportado de planilha. Datas no
-formato `dd/mm/aaaa` no meio da linha são reconhecidas e aproveitadas.
+**A verdade, medida:** a API da Caixa **sempre enviou CORS**. O que ela faz é
+**geobloqueio por IP** — só aceita faixas brasileiras (LACNIC/NICBR). O
+navegador do usuário, no Brasil, é chamador legítimo. Servidores do Netlify,
+fora do país, não são. Há um caso idêntico no fórum do Netlify: o autor passou
+meses nisso, tentou até mudar a região para São Paulo, e só resolveu alugando
+servidor no Brasil.
+
+Ou seja: **o proxy não era só desnecessário, era o que quebrava.** Ele tirava a
+requisição de um IP que funciona e a jogava num que é barrado.
+
+A arquitetura certa era a mais simples possível, e estava disponível desde o
+primeiro dia.
+
+### O que ficou disso
+
+- **A Edge Function foi removida.** Código morto que não funciona é pior que
+  código nenhum.
+- **`diagnosticarBase()`** (em `rotina.js`) roda a cada leitura e avisa quando
+  o último concurso está velho demais para a cadência da modalidade. Dado sem
+  data não recebe atestado de saúde — recebe ressalva. Foi a suposição de que
+  "sem notícia é boa notícia" que deixou os 20 meses passarem.
+- **Regra geral do projeto:** verificar o comportamento real antes de desenhar
+  em cima dele.
+
+### Desempenho medido
+
+21 ms por concurso com 6 requisições em paralelo. Baixar os 527 concursos que
+faltavam levou ~11 segundos. Depois disso, só os novos.
+
+### Se a Caixa não responder
+
+Cai num espelho público em JSON e avisa — último recurso, porque ele não traz
+datas e já provou que congela em silêncio. E **Configurações → Import manual**
+aceita qualquer arquivo com o número do concurso seguido das dezenas em cada
+linha, inclusive CSV de planilha.
+
+Se der 403 no seu computador, quase sempre é **VPN ligada**: desligue e tente
+de novo.
 
 ---
 

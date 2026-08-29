@@ -6,7 +6,7 @@ import { LOTERIAS, LISTA_LOTERIAS, universoDe, fmt, brl } from './config.js';
 import { DB } from './db.js';
 import {
   sincronizar, importarArquivo, carregarHistorico,
-  urlDoProxy, definirProxy, PROXY_PADRAO,
+  urlDoProxy, definirProxy, testarFonte, CAIXA,
 } from './api.js';
 import { analisar, sugerirFiltros } from './stats.js';
 import { gerar, filtrosPadrao, combinacoesSorteadas, pontuacaoPopularidade } from './generator.js';
@@ -1336,23 +1336,18 @@ $('#btnSalvarProxy').addEventListener('click', async () => {
 $('#btnTestarProxy').addEventListener('click', async () => {
   const el = $('#statusProxy');
   const btn = $('#btnTestarProxy');
-  const base = $('#fonteProxy').value.trim() || PROXY_PADRAO;
   btn.disabled = true; btn.textContent = 'Testando…';
   el.textContent = '';
   try {
-    const r = await fetch(`${base}/${loteria().apiCaixa ?? loteria().id}`, { cache: 'no-cache' });
-    if (!r.ok) throw new Error(`o servidor respondeu ${r.status}`);
-    const dados = await r.json();
-    const c = dados?.concursos?.[0];
-    if (!c?.numero) throw new Error('resposta em formato inesperado');
-    el.innerHTML = `<span style="color:var(--acento)">Funcionando.</span>
-      A Caixa está no concurso <b>${c.numero}</b>${
-        c.data ? ` de ${new Date(`${c.data}T12:00:00`).toLocaleDateString('pt-BR')}` : ''
+    const c = await testarFonte(estado.loteriaId);
+    el.innerHTML = `<span style="color:var(--acento)">Funcionando</span> (${c.via}).
+      A ${loteria().nome} está no concurso <b>${c.numero}</b>${
+        c.data ? `, de ${new Date(`${c.data}T12:00:00`).toLocaleDateString('pt-BR')}` : ''
       }.`;
   } catch (e) {
-    el.innerHTML = `<span style="color:var(--perigo)">Não funcionou:</span> ${e.message}.
-      <br>Se você está rodando local com <code>python -m http.server</code>, esse caminho
-      não existe mesmo — a Edge Function só roda no Netlify (ou com <code>netlify dev</code>).`;
+    el.innerHTML = `<span style="color:var(--perigo)">Não funcionou:</span> ${e.message}
+      <br>A API da Caixa só aceita acessos com IP do Brasil. Se você usa VPN,
+      desligue e tente de novo.`;
   } finally {
     btn.disabled = false; btn.textContent = 'Testar conexão';
   }

@@ -500,30 +500,36 @@
   <div class="caixa">
     <h2>De onde vêm os resultados</h2>
     <p class="nota">
-      A fonte principal é a <b>API oficial da Caixa</b>. Ela não envia cabeçalho
-      de CORS, então o navegador bloqueia a chamada feita direto da página —
-      por isso existe uma Edge Function no Netlify que busca do lado do servidor
-      e reserve o dado. É ela que o campo abaixo aponta.
+      A fonte é a <b>API oficial da Caixa</b>, chamada <b>direto pelo seu navegador</b>.
+      Sem intermediário, sem espelho, sem servidor no meio.
     </p>
-    <div class="campo">
-      <label>Endereço do proxy</label>
-      <input type="text" id="fonteProxy" placeholder="/api/loterias">
-      <span class="nota">Deixe <code>/api/loterias</code> se o site estiver publicado
-        no Netlify. Rodando local com <code>python -m http.server</code> esse caminho
-        não existe — use <code>netlify dev</code>, ou aponte para o seu site publicado
-        (ex.: <code>https://seusite.netlify.app/api/loterias</code>).</span>
-    </div>
+    <p class="nota">
+      Um detalhe que vale saber: a Caixa aceita a chamada de qualquer origem, mas
+      <b>só de IPs brasileiros</b>. Do seu computador funciona. De um servidor no
+      exterior — inclusive dos servidores do Netlify — ela responde 403. É por isso
+      que este sistema não usa proxy: tirar a requisição do seu navegador seria
+      justamente o que quebraria a conexão.
+    </p>
     <div class="botoes">
-      <button class="btn" id="btnSalvarProxy">Salvar</button>
-      <button class="btn fantasma" id="btnTestarProxy">Testar conexão</button>
+      <button class="btn" id="btnTestarProxy">Testar conexão</button>
     </div>
     <p class="nota" id="statusProxy"></p>
 
+    <details class="filtros" style="margin-top:1rem">
+      <summary>Usar um proxy próprio (avançado)</summary>
+      <p class="nota">Só faz sentido se você hospedar um servidor <b>no Brasil</b>.
+        De fora do país a Caixa recusa e o proxy não resolve nada. Deixe vazio para
+        chamar a Caixa direto, que é o recomendado.</p>
+      <div class="campo">
+        <input type="text" id="fonteProxy" placeholder="vazio = direto na Caixa">
+      </div>
+      <button class="btn fantasma" id="btnSalvarProxy">Salvar</button>
+    </details>
+
     <p class="nota" style="margin-top:1rem">
-      <b>Reserva:</b> se o proxy não responder, o sistema cai num espelho público
-      em JSON e avisa. Esse espelho já ficou 20 meses parado sem avisar ninguém —
-      por isso ele deixou de ser a fonte principal, e por isso o Painel passou a
-      checar a idade do último concurso.
+      <b>Se a Caixa estiver fora do ar</b>, o sistema tenta um espelho público em
+      JSON e avisa. Esse espelho já ficou 20 meses parado sem avisar ninguém — por
+      isso é último recurso, e por isso o Painel checa a idade do último concurso.
     </p>
   </div>
 </section>

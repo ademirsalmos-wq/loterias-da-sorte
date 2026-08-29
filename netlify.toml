@@ -4,20 +4,21 @@
   command = ""
 
 # ---------------------------------------------------------------------
-# Edge Function: ponte para a API oficial da Caixa.
+# NÃO existe mais Edge Function aqui, e isso é de propósito.
 #
-# A API da Caixa não envia cabeçalho de CORS, então o navegador bloqueia a
-# chamada feita direto da página. Esta função busca server-side e reserve o
-# dado com CORS liberado.
+# Houve uma tentativa de usar uma Edge Function como ponte para a API da
+# Caixa, partindo da suposição de que a API não enviava CORS. A suposição
+# era falsa: ela envia CORS normalmente. O que a Caixa faz é GEOBLOQUEIO
+# por IP — só aceita faixas brasileiras (LACNIC/NICBR).
 #
-# Por que Edge e não Function comum: no plano free do Netlify as Functions
-# comuns consomem do bolo de 300 créditos/mês que também paga banda e
-# deploys — e quando ele acaba, o site sai do ar. Edge Functions têm
-# 1.000.000 de invocações/mês em pool separado.
+# Resultado: os servidores do Netlify, fora do Brasil, levavam 403. O
+# proxy não só era desnecessário como piorava as coisas, tirando a
+# requisição do navegador do usuário (IP brasileiro, aceito) e jogando
+# num servidor estrangeiro (recusado).
+#
+# Hoje o navegador chama a Caixa direto. Este arquivo só publica arquivos
+# estáticos, e é tudo de que o sistema precisa daqui.
 # ---------------------------------------------------------------------
-[[edge_functions]]
-  path = "/api/loterias/*"
-  function = "loterias"
 
 [[headers]]
   for = "/*"
