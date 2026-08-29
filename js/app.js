@@ -280,7 +280,11 @@ function renderAlertaBase() {
   if (!d || d.ok) { el.innerHTML = ''; return; }
 
   const l = loteria();
-  const comoResolver = d.gravidade === 'grave'
+  const comoResolver = d.buracos
+    ? `<p class="nota">Clique em <b>Buscar agora</b> — a sincronização preenche os
+       que faltam sozinha. Se sobrar algum, rode de novo: a Caixa às vezes recusa
+       quando recebe muitas requisições seguidas.</p>`
+    : d.gravidade === 'grave'
     ? `<p class="nota">Enquanto isso não for resolvido, <b>não confie nas conferências</b>:
        os concursos que você está vendo não são os que estão sendo sorteados agora.
        Configure o proxy da Caixa em <b>Configurações</b>, ou use o import manual
@@ -291,9 +295,11 @@ function renderAlertaBase() {
   el.innerHTML = `
     <div class="alerta-base ${d.gravidade}">
       <div class="texto">
-        <b>${d.gravidade === 'grave'
-          ? 'A base de resultados está desatualizada'
-          : 'Atenção com a base de resultados'}</b>
+        <b>${d.buracos
+          ? 'A base está incompleta'
+          : d.gravidade === 'grave'
+            ? 'A base de resultados está desatualizada'
+            : 'Atenção com a base de resultados'}</b>
         ${d.motivo}
         ${d.ultimo ? `<p class="nota">Último concurso na base: <b>${d.ultimo}</b>${
           d.dataUltimo ? ` (${new Date(`${d.dataUltimo}T12:00:00`).toLocaleDateString('pt-BR')})` : ''

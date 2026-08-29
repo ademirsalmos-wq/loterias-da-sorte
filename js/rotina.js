@@ -69,6 +69,7 @@ export function diagnosticarBase(loteria, historico) {
     diasParado: null,
     ultimo: null,
     dataUltimo: null,
+    buracos: 0,
     fonte: historico.fonte ?? null,
   };
 
@@ -77,8 +78,33 @@ export function diagnosticarBase(loteria, historico) {
   }
 
   const ultimo = historico.concursos[historico.concursos.length - 1];
+  const primeiro = historico.concursos[0];
   base.ultimo = ultimo.numero;
   base.dataUltimo = historico.dataUltimo ?? ultimo.data ?? null;
+
+  /* Buracos no meio da base.
+     Uma base que vai do 1 ao 3773 mas só tem 3366 concursos está faltando
+     407 — e nada na tela denunciava isso. Estatística calculada sobre uma
+     base furada não dá erro: dá número errado com cara de certo, que é bem
+     pior. A causa conhecida é a Caixa recusar rajada de requisições; a
+     sincronização repesca sozinha, e este aviso existe para o caso de
+     sobrar alguma. */
+  const esperados = ultimo.numero - primeiro.numero + 1;
+  const buracos = esperados - historico.concursos.length;
+  base.buracos = buracos > 0 ? buracos : 0;
+
+  if (buracos > 0) {
+    return {
+      ...base,
+      ok: false,
+      gravidade: buracos > esperados * 0.02 ? 'grave' : 'atencao',
+      motivo:
+        `Faltam ${buracos.toLocaleString('pt-BR')} concursos no meio da base ` +
+        `(ela vai do ${primeiro.numero} ao ${ultimo.numero}, mas só tem ` +
+        `${historico.concursos.length.toLocaleString('pt-BR')}). ` +
+        'As estatísticas ficam distorcidas até isso ser preenchido.',
+    };
+  }
 
   /* Sem data não dá para medir defasagem. É o caso do espelho JSON — e foi
      exatamente por isso que os 20 meses passaram despercebidos. Então dado

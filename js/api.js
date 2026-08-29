@@ -43,13 +43,24 @@ import { DB } from './db.js';
 export const CAIXA = 'https://servicebus2.caixa.gov.br/portaldeloterias/api';
 
 /**
- * Quantas requisições simultâneas ao servidor da Caixa.
+ * Ritmo das requisições à Caixa.
  *
- * Seis é rápido (medido: ~21 ms por concurso) e educado. Subir muito além
- * disso não acelera de forma relevante e aumenta a chance de o servidor
- * começar a recusar.
+ * Medido no volume real: com 6 em paralelo e sem pausa, os primeiros ~20
+ * concursos passam e depois o servidor começa a recusar — numa carga de 527
+ * chegaram a falhar 407. Os mesmos concursos respondiam 200 na hora seguinte,
+ * refeitos devagar: não é dado ausente, é rajada demais.
+ *
+ * Daí o desenho atual: menos paralelismo, uma pausa entre blocos, e rodadas
+ * de repescagem cada vez mais lentas para o que sobrar.
  */
-const PARALELISMO = 6;
+const PARALELISMO = 4;
+const PAUSA_ENTRE_BLOCOS = 90;      // ms
+const RODADAS_REPESCAGEM = 3;
+
+/** Teto por sincronização, para uma base vazia não virar uma sessão eterna. */
+const MAX_POR_SYNC = 1500;
+
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Proxy opcional. Só faz sentido se um dia você hospedar um servidor NO
@@ -165,30 +176,53 @@ export async function sincronizarPelaCaixa(loteriaId, onProgresso = () => {}) {
   }
 
   const atual = await DB.lerHistorico(loteriaId);
-  const jaTemos = atual?.concursos ? Object.keys(atual.concursos).map(Number) : [];
-  const ultimoLocal = jaTemos.length ? Math.max(...jaTemos) : 0;
+  const temLocal = new Set(
+    atual?.concursos ? Object.keys(atual.concursos).map(Number) : []
+  );
 
   const novos = ultimoOficialC ? [ultimoOficialC] : [];
-  const faltando = [];
-  for (let n = ultimoLocal + 1; n < ultimoOficial; n++) faltando.push(n);
+  if (ultimoOficialC) temLocal.add(ultimoOficialC.numero);
 
-  const falhas = [];
+  /* Busca TUDO que falta entre 1 e o último oficial — não só o que vem
+     depois do último que temos. Assim a base se conserta sozinha se ficou
+     com buracos numa tentativa anterior, em vez de carregar o defeito para
+     sempre e estragar a estatística em silêncio. */
+  let faltando = [];
+  for (let n = 1; n < ultimoOficial; n++) if (!temLocal.has(n)) faltando.push(n);
 
-  for (let i = 0; i < faltando.length; i += PARALELISMO) {
-    const bloco = faltando.slice(i, i + PARALELISMO);
+  const excedente = Math.max(0, faltando.length - MAX_POR_SYNC);
+  if (excedente) faltando = faltando.slice(-MAX_POR_SYNC);   // os mais recentes primeiro
+
+  const buscarLista = async (lista, paralelo, pausa) => {
+    const falhas = [];
+    for (let i = 0; i < lista.length; i += paralelo) {
+      const bloco = lista.slice(i, i + paralelo);
+      onProgresso(
+        `Baixando ${loteria.nome}: ${novos.length}/${faltando.length + 1} concursos…`
+      );
+      const saidas = await Promise.allSettled(
+        bloco.map((n) => buscarJson(enderecoCaixa(base, modalidade, n), 20000))
+      );
+      saidas.forEach((sa, k) => {
+        const c = sa.status === 'fulfilled' ? normalizarCaixa(sa.value, loteria) : null;
+        if (c) novos.push(c);
+        else falhas.push(bloco[k]);
+      });
+      if (pausa) await dormir(pausa);
+    }
+    return falhas;
+  };
+
+  let falhas = await buscarLista(faltando, PARALELISMO, PAUSA_ENTRE_BLOCOS);
+
+  /* Repescagem: o que falhou quase sempre é recusa por excesso de rajada,
+     não concurso inexistente. Cada rodada vai mais devagar que a anterior. */
+  for (let rodada = 1; rodada <= RODADAS_REPESCAGEM && falhas.length; rodada++) {
     onProgresso(
-      `Baixando ${loteria.nome}: ${i}/${faltando.length} concursos…`
+      `Refazendo ${falhas.length} concurso(s) que a Caixa recusou (tentativa ${rodada})…`
     );
-
-    const saidas = await Promise.allSettled(
-      bloco.map((n) => buscarJson(enderecoCaixa(base, modalidade, n), 20000))
-    );
-
-    saidas.forEach((s, k) => {
-      const c = s.status === 'fulfilled' ? normalizarCaixa(s.value, loteria) : null;
-      if (c) novos.push(c);
-      else falhas.push(bloco[k]);
-    });
+    await dormir(400 * rodada);
+    falhas = await buscarLista(falhas, Math.max(1, 3 - rodada), 150 * rodada);
   }
 
   const r = await gravarMesclado(loteriaId, novos, {
@@ -196,7 +230,13 @@ export async function sincronizarPelaCaixa(loteriaId, onProgresso = () => {}) {
     fonte: 'caixa',
   });
 
-  return { ...r, baixados: novos.length, falhas, fonte: 'caixa' };
+  return {
+    ...r,
+    baixados: novos.length,
+    falhas,
+    naoTentados: excedente,
+    fonte: 'caixa',
+  };
 }
 
 /* ------------------------------------------------------------------ */
