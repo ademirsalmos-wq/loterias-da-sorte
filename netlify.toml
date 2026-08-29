@@ -1,0 +1,32 @@
+# Sem build: o site é estático e publicado direto da raiz.
+[build]
+  publish = "."
+  command = ""
+
+# ---------------------------------------------------------------------
+# Edge Function: ponte para a API oficial da Caixa.
+#
+# A API da Caixa não envia cabeçalho de CORS, então o navegador bloqueia a
+# chamada feita direto da página. Esta função busca server-side e reserve o
+# dado com CORS liberado.
+#
+# Por que Edge e não Function comum: no plano free do Netlify as Functions
+# comuns consomem do bolo de 300 créditos/mês que também paga banda e
+# deploys — e quando ele acaba, o site sai do ar. Edge Functions têm
+# 1.000.000 de invocações/mês em pool separado.
+# ---------------------------------------------------------------------
+[[edge_functions]]
+  path = "/api/loterias/*"
+  function = "loterias"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+
+# Os módulos JS precisam do MIME correto para o navegador aceitá-los.
+[[headers]]
+  for = "/js/*.js"
+  [headers.values]
+    Content-Type = "text/javascript; charset=utf-8"
