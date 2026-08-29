@@ -579,7 +579,10 @@ input[type=number].premio-input {
   font-size: 1.35rem; font-weight: 700; line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
-.data-concurso { color: var(--texto-3); font-size: .82rem; text-transform: capitalize; }
+/* `capitalize` maiusculiza TODA palavra: "Sexta-Feira, 28 De Agosto De 2026".
+   Em português só a primeira letra sobe — daí o ::first-letter. */
+.data-concurso { color: var(--texto-3); font-size: .82rem; }
+.data-concurso::first-letter { text-transform: uppercase; }
 
 .navegacao { display: flex; gap: .3rem; align-items: center; }
 .navegacao .btn { padding: .4rem .6rem; font-size: .9rem; line-height: 1; }

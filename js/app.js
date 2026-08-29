@@ -72,8 +72,28 @@ function toast(msg, erro = false) {
   timerToast = setTimeout(() => el.classList.remove('visivel'), 3600);
 }
 
+/**
+ * Dá ao navegador uma folga para desenhar o "Gerando…" antes de o cálculo
+ * pesado travar a thread.
+ *
+ * O `requestAnimationFrame` sozinho NÃO serve: quando a aba está em segundo
+ * plano ou a tela do celular apagou, o navegador para de pintar e o quadro
+ * nunca chega. A promessa ficava pendente para sempre, o `finally` que
+ * devolve o botão ao normal nunca rodava, e o botão congelava em "Gerando…"
+ * até recarregar a página. Acontecia justamente nas operações demoradas —
+ * gerador, fechamento, varredura — que são as que dá vontade de deixar
+ * rodando enquanto se faz outra coisa.
+ *
+ * Por isso o quadro corre contra um relógio: se não vier, seguimos assim
+ * mesmo. Não há nada para pintar numa aba invisível.
+ */
 function esperarPintura() {
-  return new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  return new Promise((r) => {
+    let pronto = false;
+    const seguir = () => { if (!pronto) { pronto = true; r(); } };
+    requestAnimationFrame(() => setTimeout(seguir, 0));
+    setTimeout(seguir, 60);
+  });
 }
 
 function bolinhas(dezenas, destaque = new Set(), classe = 'acerto') {
