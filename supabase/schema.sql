@@ -1,76 +1,99 @@
 -- ===================================================================
--- Loterias da Sorte — schema opcional para sincronização em nuvem.
+-- Loterias da Sorte — schema para a sincronização entre aparelhos.
 --
--- Só é necessário se você trocar o adaptador em js/db.js para
--- SupabaseAdapter. Por padrão o sistema roda 100% em IndexedDB e este
--- arquivo pode ser ignorado.
+-- Rode isto uma vez no SQL Editor do seu projeto Supabase.
+-- Depois é só preencher URL e chave anônima em Configurações no app.
 --
--- Lembrete: o limite do plano free é de 2 projetos ATIVOS por
--- ORGANIZAÇÃO. Se os seus dois já estão ocupados, crie uma nova
--- organização free — é gratuito e libera o terceiro projeto.
+-- NÃO PRECISA DE UM PROJETO NOVO. O limite do plano free é de 500 MB de
+-- banco, não de tabelas — e estes bilhetes ocupam alguns kilobytes. Dá para
+-- rodar isto dentro de um projeto que você já usa para outra coisa.
+--
+-- Por isso a tabela se chama `loterias_bilhetes`, com prefixo: para conviver
+-- sem colidir com as tabelas da aplicação que já mora ali.
+--
+-- O QUE NÃO ESTÁ AQUI, DE PROPÓSITO: o histórico de concursos. São ~10 mil
+-- registros públicos, iguais para todos os usuários, que cada aparelho
+-- busca da Caixa em segundos. Guardá-los aqui só gastaria cota de banco e
+-- de transferência sem benefício nenhum.
 -- ===================================================================
 
-create table if not exists public.bilhetes (
-  id          bigint generated always as identity primary key,
-  user_id     uuid not null default auth.uid() references auth.users(id) on delete cascade,
+create table if not exists public.loterias_bilhetes (
+  -- UUID gerado no aparelho, não sequencial: com dois aparelhos, dois
+  -- contadores independentes gerariam o mesmo id e um sobrescreveria o
+  -- outro em silêncio.
+  id            uuid primary key,
+  user_id       uuid not null references auth.users(id) on delete cascade,
 
-  loteria     text not null check (loteria in ('lotofacil','megasena','lotomania')),
-  dezenas     smallint[] not null,
-  concurso    integer,
+  loteria       text not null check (loteria in ('lotofacil','megasena','lotomania')),
+  dezenas       smallint[] not null,
+  concurso      integer,
 
-  origem      text default 'manual',   -- 'gerador' | 'fechamento' | 'manual'
-  grupo       text,                    -- agrupa os bilhetes de um mesmo lote
-  rotulo      text,
+  origem        text,           -- 'gerador' | 'fechamento' | 'manual'
+  grupo         text,           -- agrupa os bilhetes de um mesmo lote
+  rotulo        text,
 
-  custo       numeric(10,2) not null default 0,
-  conferido   boolean not null default false,
-  acertos     smallint,
-  premiado    boolean not null default false,
-  premio      numeric(12,2) not null default 0,
+  custo         numeric(10,2) not null default 0,
+  conferido     boolean not null default false,
+  acertos       smallint,
+  premiado      boolean not null default false,
+  premio        numeric(12,2) not null default 0,
 
-  criado_em   timestamptz not null default now()
+  -- Apagar é marcar, não sumir: sem esta lápide, o aparelho que não viu a
+  -- exclusão devolveria o bilhete na sincronização seguinte.
+  removido      boolean not null default false,
+
+  criado_em     timestamptz,
+  -- É por esta data que o conflito entre aparelhos se resolve: vence a
+  -- alteração mais recente, em qualquer direção.
+  atualizado_em timestamptz not null default now()
 );
 
-create index if not exists bilhetes_user_loteria_idx
-  on public.bilhetes (user_id, loteria);
+create index if not exists loterias_bilhetes_user_idx
+  on public.loterias_bilhetes (user_id, loteria);
 
-create index if not exists bilhetes_concurso_idx
-  on public.bilhetes (user_id, loteria, concurso);
+-- A sincronização pergunta "o que mudou depois de X?" a cada rodada.
+create index if not exists loterias_bilhetes_atualizado_idx
+  on public.loterias_bilhetes (user_id, atualizado_em desc);
 
 -- -------------------------------------------------------------------
--- Row Level Security: cada pessoa enxerga e mexe só nos próprios
--- bilhetes. Sem isto, a chave anônima do front-end daria acesso à
--- tabela inteira — inclusive para escrita.
+-- Segurança
+--
+-- A chave anônima fica visível no navegador — é o desenho do Supabase, e
+-- só é seguro por causa do RLS. Sem as políticas abaixo, essa chave daria
+-- a qualquer pessoa acesso de leitura E ESCRITA à tabela inteira.
 -- -------------------------------------------------------------------
 
-alter table public.bilhetes enable row level security;
+alter table public.loterias_bilhetes enable row level security;
 
-drop policy if exists "bilhetes proprios: ler"     on public.bilhetes;
-drop policy if exists "bilhetes proprios: inserir" on public.bilhetes;
-drop policy if exists "bilhetes proprios: alterar" on public.bilhetes;
-drop policy if exists "bilhetes proprios: apagar"  on public.bilhetes;
+drop policy if exists "bilhetes proprios: ler"     on public.loterias_bilhetes;
+drop policy if exists "bilhetes proprios: inserir" on public.loterias_bilhetes;
+drop policy if exists "bilhetes proprios: alterar" on public.loterias_bilhetes;
+drop policy if exists "bilhetes proprios: apagar"  on public.loterias_bilhetes;
 
 create policy "bilhetes proprios: ler"
-  on public.bilhetes for select
+  on public.loterias_bilhetes for select
   using (auth.uid() = user_id);
 
 create policy "bilhetes proprios: inserir"
-  on public.bilhetes for insert
+  on public.loterias_bilhetes for insert
   with check (auth.uid() = user_id);
 
 create policy "bilhetes proprios: alterar"
-  on public.bilhetes for update
+  on public.loterias_bilhetes for update
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
 create policy "bilhetes proprios: apagar"
-  on public.bilhetes for delete
+  on public.loterias_bilhetes for delete
   using (auth.uid() = user_id);
 
 -- -------------------------------------------------------------------
--- O histórico de concursos NÃO tem tabela aqui de propósito: são dados
--- públicos, pesados (milhares de linhas por modalidade) e idênticos
--- para todos os usuários. Guardá-los no Supabase só consumiria cota de
--- banco e de transferência sem benefício nenhum — eles continuam em
--- IndexedDB, no navegador, mesmo com a nuvem ligada.
+-- Conferência rápida depois de rodar (deve devolver 4 linhas):
+--
+--   select policyname from pg_policies where tablename = 'loterias_bilhetes';
+--
+-- E o RLS precisa estar ligado:
+--
+--   select relrowsecurity from pg_class where relname = 'loterias_bilhetes';
+--   -- esperado: t
 -- -------------------------------------------------------------------

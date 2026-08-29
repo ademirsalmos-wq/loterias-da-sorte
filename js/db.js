@@ -1,31 +1,106 @@
 /**
  * db.js — Camada de persistência.
  *
- * A aplicação inteira fala com o objeto `DB` exportado no fim do arquivo.
- * Nada além deste arquivo sabe COMO os dados são guardados. Hoje o padrão
- * é IndexedDB (100% local, offline, sem custo). Se um dia você quiser
- * sincronizar entre celular e PC, preencha as credenciais em
- * `SUPABASE_CONFIG` e troque a linha final — o resto do sistema não muda.
+ * A aplicação inteira fala com o objeto `DB`. Nada além deste arquivo sabe
+ * COMO os dados são guardados.
  *
- * Stores:
- *  - historico : um registro por loteria com TODOS os concursos (blob único).
- *                Muito mais rápido do que 3.500 registros soltos.
- *  - bilhetes  : as suas apostas.
- *  - config    : chave/valor (preferências, preços, última sincronização).
+ * =====================================================================
+ * LOCAL-FIRST, NÃO "OU LOCAL OU NUVEM"
+ *
+ * O desenho é: **IndexedDB é sempre a base de trabalho**. Tudo é lido e
+ * escrito aqui, instantâneo e offline. A nuvem (js/nuvem.js) é um espelho
+ * que sincroniza por cima, quando dá.
+ *
+ * Isso importa porque a alternativa — falar direto com o Supabase — faria
+ * o app depender de internet para abrir uma tela, e travaria no celular
+ * em elevador. Além de gastar cota de banco para ler o que já está aqui.
+ *
+ * Três consequências no formato dos registros:
+ *
+ *  1. `id` é um UUID, não um número sequencial. Com dois aparelhos, dois
+ *     contadores independentes gerariam o id 1 nos dois e um sobrescreveria
+ *     o outro na nuvem, em silêncio. UUID torna isso impossível.
+ *
+ *  2. Todo bilhete carrega `atualizadoEm`. É por essa data que o conflito
+ *     entre aparelhos se resolve: vence a alteração mais recente.
+ *
+ *  3. Apagar é marcar `removido: true`, não sumir com o registro. Sem essa
+ *     lápide, o aparelho que não viu a exclusão ressuscitaria o bilhete na
+ *     próxima sincronização.
+ * =====================================================================
  */
 
 const DB_NOME = 'loterias-da-sorte';
-const DB_VERSAO = 1;
+const DB_VERSAO = 2;
 
 const STORE_HISTORICO = 'historico';
 const STORE_BILHETES = 'bilhetes';
 const STORE_CONFIG = 'config';
 
+/** Identificador único, com plano B para navegador sem crypto.randomUUID. */
+export function novoId() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
+const agora = () => new Date().toISOString();
+
 /* ------------------------------------------------------------------ */
-/* Adaptador IndexedDB                                                 */
+/* Abertura e migração                                                 */
 /* ------------------------------------------------------------------ */
 
 let _conexao = null;
+
+function criarStores(db) {
+  if (!db.objectStoreNames.contains(STORE_HISTORICO)) {
+    db.createObjectStore(STORE_HISTORICO, { keyPath: 'loteria' });
+  }
+  if (!db.objectStoreNames.contains(STORE_CONFIG)) {
+    db.createObjectStore(STORE_CONFIG, { keyPath: 'chave' });
+  }
+}
+
+/**
+ * v1 → v2: bilhetes deixam de ter id sequencial e passam a ter UUID.
+ *
+ * Não dá para mudar `autoIncrement` de um object store existente, então o
+ * caminho é: ler tudo, destruir, recriar e regravar com o id novo. Roda
+ * dentro da transação de upgrade, que continua viva entre os callbacks.
+ */
+function migrarParaUUID(db, tx, aoTerminar) {
+  if (!db.objectStoreNames.contains(STORE_BILHETES)) {
+    const s = db.createObjectStore(STORE_BILHETES, { keyPath: 'id' });
+    s.createIndex('porLoteria', 'loteria', { unique: false });
+    s.createIndex('porConcurso', ['loteria', 'concurso'], { unique: false });
+    aoTerminar();
+    return;
+  }
+
+  const pedido = tx.objectStore(STORE_BILHETES).getAll();
+  pedido.onsuccess = () => {
+    const antigos = pedido.result ?? [];
+
+    db.deleteObjectStore(STORE_BILHETES);
+    const novo = db.createObjectStore(STORE_BILHETES, { keyPath: 'id' });
+    novo.createIndex('porLoteria', 'loteria', { unique: false });
+    novo.createIndex('porConcurso', ['loteria', 'concurso'], { unique: false });
+
+    for (const b of antigos) {
+      novo.put({
+        ...b,
+        id: novoId(),
+        idAntigo: b.id ?? null,        // rastro, caso algo precise ser conferido
+        removido: false,
+        atualizadoEm: b.criadoEm ?? agora(),
+      });
+    }
+    aoTerminar(antigos.length);
+  };
+  pedido.onerror = () => aoTerminar(0);
+}
 
 function abrir() {
   if (_conexao) return Promise.resolve(_conexao);
@@ -35,22 +110,14 @@ function abrir() {
 
     req.onupgradeneeded = (ev) => {
       const db = ev.target.result;
+      const tx = ev.target.transaction;
 
-      if (!db.objectStoreNames.contains(STORE_HISTORICO)) {
-        db.createObjectStore(STORE_HISTORICO, { keyPath: 'loteria' });
-      }
+      criarStores(db);
 
-      if (!db.objectStoreNames.contains(STORE_BILHETES)) {
-        const s = db.createObjectStore(STORE_BILHETES, {
-          keyPath: 'id',
-          autoIncrement: true,
+      if (ev.oldVersion < 2) {
+        migrarParaUUID(db, tx, (quantos) => {
+          if (quantos) console.info(`[db] ${quantos} bilhete(s) migrados para UUID.`);
         });
-        s.createIndex('porLoteria', 'loteria', { unique: false });
-        s.createIndex('porConcurso', ['loteria', 'concurso'], { unique: false });
-      }
-
-      if (!db.objectStoreNames.contains(STORE_CONFIG)) {
-        db.createObjectStore(STORE_CONFIG, { keyPath: 'chave' });
       }
     };
 
@@ -59,6 +126,8 @@ function abrir() {
       resolve(_conexao);
     };
     req.onerror = () => reject(req.error);
+    req.onblocked = () =>
+      reject(new Error('Feche as outras abas do sistema para atualizar o banco.'));
   });
 }
 
@@ -76,12 +145,9 @@ function transacao(store, modo, fn) {
           return;
         }
         tx.oncomplete = () => {
-          // Se fn devolveu uma IDBRequest, entrega o .result dela.
-          // (Cuidado: `'result' in x` estoura se x for número ou string.)
+          // Cuidado: `'result' in x` estoura se x for número ou string.
           const ehRequest =
-            resultado !== null &&
-            typeof resultado === 'object' &&
-            'result' in resultado;
+            resultado !== null && typeof resultado === 'object' && 'result' in resultado;
           resolve(ehRequest ? resultado.result : resultado);
         };
         tx.onerror = () => reject(tx.error);
@@ -90,7 +156,11 @@ function transacao(store, modo, fn) {
   );
 }
 
-const IndexedDBAdapter = {
+/* ------------------------------------------------------------------ */
+/* Adaptador IndexedDB                                                 */
+/* ------------------------------------------------------------------ */
+
+export const DB = {
   nome: 'IndexedDB (local)',
 
   /* ---- histórico de concursos ---- */
@@ -99,8 +169,8 @@ const IndexedDBAdapter = {
     return transacao(STORE_HISTORICO, 'readwrite', (os) =>
       os.put({
         loteria: loteriaId,
-        concursos, // { "3401": [1,2,3,...], ... }
-        atualizadoEm: new Date().toISOString(),
+        concursos,
+        atualizadoEm: agora(),
         ...meta,
       })
     );
@@ -116,35 +186,88 @@ const IndexedDBAdapter = {
 
   /* ---- bilhetes ---- */
 
+  /** Normaliza o registro: garante id, data de alteração e lápide. */
+  _preparar(b) {
+    return {
+      ...b,
+      id: b.id ?? novoId(),
+      removido: b.removido ?? false,
+      atualizadoEm: b.atualizadoEm ?? agora(),
+    };
+  },
+
   async salvarBilhete(bilhete) {
-    const registro = { ...bilhete };
-    if (registro.id == null) delete registro.id;
-    return transacao(STORE_BILHETES, 'readwrite', (os) => os.put(registro));
+    const reg = DB._preparar({ ...bilhete, atualizadoEm: agora() });
+    await transacao(STORE_BILHETES, 'readwrite', (os) => os.put(reg));
+    return reg.id;
   },
 
   async salvarBilhetes(lista) {
+    const regs = lista.map((b) => DB._preparar({ ...b, atualizadoEm: agora() }));
+    await transacao(STORE_BILHETES, 'readwrite', (os) => {
+      for (const r of regs) os.put(r);
+      return regs.length;
+    });
+    return regs;
+  },
+
+  /**
+   * Grava exatamente como veio, sem mexer em `atualizadoEm`.
+   * É o que a sincronização usa ao trazer registros da nuvem — carimbar a
+   * data de novo faria o registro parecer mais novo do que é e criaria um
+   * pingue-pongue infinito entre os aparelhos.
+   */
+  async gravarComoEsta(lista) {
     return transacao(STORE_BILHETES, 'readwrite', (os) => {
-      for (const b of lista) {
-        const registro = { ...b };
-        if (registro.id == null) delete registro.id;
-        os.put(registro);
-      }
+      for (const b of lista) os.put(DB._preparar(b));
       return lista.length;
     });
   },
 
-  async listarBilhetes(loteriaId = null) {
-    return transacao(STORE_BILHETES, 'readonly', (os) =>
+  /** Por padrão esconde os removidos; `incluirRemovidos` é para a sincronização. */
+  async listarBilhetes(loteriaId = null, incluirRemovidos = false) {
+    const todos = await transacao(STORE_BILHETES, 'readonly', (os) =>
       loteriaId ? os.index('porLoteria').getAll(loteriaId) : os.getAll()
+    );
+    return incluirRemovidos ? todos : todos.filter((b) => !b.removido);
+  },
+
+  /**
+   * Apagar é marcar, não sumir. Sem a lápide, o outro aparelho não fica
+   * sabendo da exclusão e devolve o bilhete na próxima sincronização.
+   */
+  async apagarBilhete(id) {
+    const atual = await transacao(STORE_BILHETES, 'readonly', (os) => os.get(id));
+    if (!atual) return;
+    return transacao(STORE_BILHETES, 'readwrite', (os) =>
+      os.put({ ...atual, removido: true, atualizadoEm: agora() })
     );
   },
 
-  async apagarBilhete(id) {
-    return transacao(STORE_BILHETES, 'readwrite', (os) => os.delete(id));
+  async apagarTodosBilhetes() {
+    const todos = await DB.listarBilhetes(null, true);
+    const marcados = todos
+      .filter((b) => !b.removido)
+      .map((b) => ({ ...b, removido: true, atualizadoEm: agora() }));
+    if (!marcados.length) return 0;
+    return transacao(STORE_BILHETES, 'readwrite', (os) => {
+      for (const b of marcados) os.put(b);
+      return marcados.length;
+    });
   },
 
-  async apagarTodosBilhetes() {
-    return transacao(STORE_BILHETES, 'readwrite', (os) => os.clear());
+  /** Remove de vez as lápides antigas — a nuvem já as propagou faz tempo. */
+  async limparLapides(diasParaGuardar = 90) {
+    const corte = Date.now() - diasParaGuardar * 86400000;
+    const todos = await DB.listarBilhetes(null, true);
+    const velhas = todos.filter(
+      (b) => b.removido && new Date(b.atualizadoEm ?? 0).getTime() < corte
+    );
+    if (!velhas.length) return 0;
+    return transacao(STORE_BILHETES, 'readwrite', (os) => {
+      for (const b of velhas) os.delete(b.id);
+      return velhas.length;
+    });
   },
 
   /* ---- configurações ---- */
@@ -163,93 +286,3 @@ const IndexedDBAdapter = {
     return Object.fromEntries(linhas.map((l) => [l.chave, l.valor]));
   },
 };
-
-/* ------------------------------------------------------------------ */
-/* Adaptador Supabase (opcional — desligado por padrão)                */
-/* ------------------------------------------------------------------ */
-
-/**
- * Para ligar a sincronização em nuvem:
- *
- * 1. Crie uma NOVA organização free no Supabase (o limite de 2 projetos
- *    é por organização, não por conta — assim você não gasta os seus).
- * 2. Rode o SQL de `supabase/schema.sql` no editor do projeto.
- * 3. Preencha url e anonKey abaixo.
- * 4. Troque a última linha deste arquivo para:
- *        export const DB = SupabaseAdapter;
- *
- * O histórico de concursos continua em IndexedDB mesmo com Supabase ligado:
- * são dados públicos, pesados e idênticos para todo mundo — não faz sentido
- * ocupar banco com eles.
- */
-export const SUPABASE_CONFIG = {
-  url: '',
-  anonKey: '',
-};
-
-export const SupabaseAdapter = {
-  nome: 'Supabase (nuvem)',
-  _cli: null,
-
-  async cliente() {
-    if (this._cli) return this._cli;
-    if (!SUPABASE_CONFIG.url || !SUPABASE_CONFIG.anonKey) {
-      throw new Error('Supabase não configurado — preencha SUPABASE_CONFIG em js/db.js');
-    }
-    const { createClient } = await import(
-      'https://esm.sh/@supabase/supabase-js@2'
-    );
-    this._cli = createClient(SUPABASE_CONFIG.url, SUPABASE_CONFIG.anonKey);
-    return this._cli;
-  },
-
-  // Histórico continua local — dados públicos e pesados.
-  salvarHistorico: IndexedDBAdapter.salvarHistorico,
-  lerHistorico: IndexedDBAdapter.lerHistorico,
-  limparHistorico: IndexedDBAdapter.limparHistorico,
-
-  async salvarBilhete(bilhete) {
-    const c = await this.cliente();
-    const { data, error } = await c.from('bilhetes').upsert(bilhete).select().single();
-    if (error) throw error;
-    return data.id;
-  },
-
-  async salvarBilhetes(lista) {
-    const c = await this.cliente();
-    const { error } = await c.from('bilhetes').upsert(lista);
-    if (error) throw error;
-    return lista.length;
-  },
-
-  async listarBilhetes(loteriaId = null) {
-    const c = await this.cliente();
-    let q = c.from('bilhetes').select('*');
-    if (loteriaId) q = q.eq('loteria', loteriaId);
-    const { data, error } = await q.order('id', { ascending: false });
-    if (error) throw error;
-    return data;
-  },
-
-  async apagarBilhete(id) {
-    const c = await this.cliente();
-    const { error } = await c.from('bilhetes').delete().eq('id', id);
-    if (error) throw error;
-  },
-
-  async apagarTodosBilhetes() {
-    const c = await this.cliente();
-    const { error } = await c.from('bilhetes').delete().neq('id', 0);
-    if (error) throw error;
-  },
-
-  // Configurações continuam locais (são preferências do dispositivo).
-  setConfig: IndexedDBAdapter.setConfig,
-  getConfig: IndexedDBAdapter.getConfig,
-  todasConfigs: IndexedDBAdapter.todasConfigs,
-};
-
-/* ------------------------------------------------------------------ */
-
-/** Troque aqui para SupabaseAdapter quando quiser sincronizar. */
-export const DB = IndexedDBAdapter;

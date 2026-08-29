@@ -22,6 +22,12 @@ import {
   rodarRotinaCompleta, lerBoletim, dispensarBoletim, bilhetesEmAberto,
   diagnosticarBase,
 } from './rotina.js';
+import {
+  registrarServiceWorker, aplicarAtualizacao, prepararInstalacao,
+  instalar, estaInstalado,
+} from './pwa.js';
+import * as Nuvem from './nuvem.js';
+import { iniciarResultados, atualizarResultados } from './resultados-ui.js';
 
 /* ------------------------------------------------------------------ */
 /* Estado                                                              */
@@ -179,6 +185,7 @@ async function trocarLoteria() {
   montarOpcoesFechamento();
   preencherConcursoAlvo();
   renderAlertaBase();
+  atualizarResultados();
   await renderBilhetes();
   await renderBoletim();
   await renderEmAberto();
@@ -1084,6 +1091,7 @@ async function salvarBilhetesEAtualizar(bilhetes) {
   await renderPainel();
   await renderEmAberto();
   await atualizarRetrospectiva();
+  sincronizarNuvem();          // em segundo plano: não trava a tela
 }
 
 function lerDezenas(texto, l) {
@@ -1451,6 +1459,165 @@ $('#fecharAviso').addEventListener('click', async () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* PWA: atualização e instalação                                       */
+/* ------------------------------------------------------------------ */
+
+function mostrarFaixaAtualizacao(reg) {
+  const el = $('#faixaAtualizacao');
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="faixa-atualizacao">
+      <span>Tem uma versão nova do sistema disponível.</span>
+      <span class="acoes">
+        <button class="btn primario" id="btnAtualizarAgora">Atualizar</button>
+        <button class="link" id="btnAtualizarDepois">depois</button>
+      </span>
+    </div>`;
+
+  $('#btnAtualizarAgora').addEventListener('click', () => {
+    $('#btnAtualizarAgora').textContent = 'Atualizando…';
+    aplicarAtualizacao(reg);
+  });
+  $('#btnAtualizarDepois').addEventListener('click', () => { el.hidden = true; });
+}
+
+function prepararBotaoInstalar() {
+  const caixa = $('#caixaInstalar');
+  if (estaInstalado()) { caixa.hidden = true; return; }
+
+  prepararInstalacao({
+    aoPoderInstalar: (info) => {
+      if (info.instalado) {
+        caixa.hidden = true;
+        toast('Instalado. Procure o trevo na tela do aparelho.');
+        return;
+      }
+      caixa.hidden = false;
+      if (info.ios) {
+        $('#btnInstalar').hidden = true;
+        $('#dicaInstalar').innerHTML =
+          'No iPhone e iPad a instalação é manual: toque no botão de ' +
+          '<b>Compartilhar</b> na barra do Safari e escolha ' +
+          '<b>Adicionar à Tela de Início</b>.';
+      }
+    },
+  });
+
+  $('#btnInstalar').addEventListener('click', async () => {
+    const r = await instalar();
+    if (!r.ok && r.manual) {
+      $('#dicaInstalar').innerHTML = r.ios
+        ? 'No Safari: botão <b>Compartilhar</b> → <b>Adicionar à Tela de Início</b>.'
+        : 'Seu navegador não oferece o instalador automático. Procure ' +
+          '"Instalar aplicativo" no menu dele.';
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Nuvem                                                               */
+/* ------------------------------------------------------------------ */
+
+async function renderNuvem() {
+  const cfg = await Nuvem.lerConfig();
+  const sessao = await Nuvem.sessaoAtual();
+  const ultima = await Nuvem.ultimaSincronizacao();
+  const el = $('#estadoNuvem');
+
+  $('#nuvemUrl').value = cfg.url ?? '';
+  $('#nuvemChave').value = cfg.anonKey ?? '';
+
+  const configurada = Boolean(cfg.url && cfg.anonKey);
+  $('#loginNuvem').hidden = !configurada || Boolean(sessao);
+  $('#acoesNuvem').hidden = !sessao;
+  $('#detalhesNuvem').open = !configurada;
+
+  if (!configurada) {
+    el.innerHTML = `<p class="nota">Desligada. Os bilhetes ficam só neste aparelho.</p>`;
+    return;
+  }
+  if (!sessao) {
+    el.innerHTML = `<p class="nota">Configurada, mas você ainda não entrou.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="linha-aberto">
+      <span class="qual">Conectado como <b>${sessao.email ?? 'sua conta'}</b></span>
+      <span class="quanto">${ultima
+        ? `última sincronização: ${new Date(ultima).toLocaleString('pt-BR')}`
+        : 'ainda não sincronizou'}</span>
+    </div>`;
+}
+
+/** Sincroniza sem atrapalhar: falha de rede aqui não pode quebrar nada. */
+async function sincronizarNuvem({ silencioso = true, completa = false } = {}) {
+  if (!(await Nuvem.estaConfigurada())) return null;
+  if (!(await Nuvem.sessaoAtual())) return null;
+
+  const btn = $('#btnSincronizarNuvem');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sincronizando…'; }
+  try {
+    const r = await Nuvem.sincronizar({ completa });
+    if (r.aplicados) {
+      await renderBilhetes();
+      await renderPainel();
+      await renderEmAberto();
+      await atualizarRetrospectiva();
+    }
+    if (!silencioso) {
+      toast(
+        `Nuvem: ${r.enviados} enviado(s), ${r.aplicados} recebido(s) deste aparelho.`
+      );
+    }
+    await renderNuvem();
+    return r;
+  } catch (e) {
+    if (!silencioso) toast(`Nuvem: ${e.message}`, true);
+    else console.warn('[nuvem]', e.message);
+    return null;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Sincronizar agora'; }
+  }
+}
+
+$('#btnSalvarNuvem').addEventListener('click', async () => {
+  await Nuvem.salvarConfig({
+    url: $('#nuvemUrl').value,
+    anonKey: $('#nuvemChave').value,
+  });
+  await renderNuvem();
+  $('#statusNuvem').textContent = 'Salvo. Agora entre com seu e-mail.';
+});
+
+$('#btnEnviarLink').addEventListener('click', async () => {
+  const email = $('#nuvemEmail').value.trim();
+  if (!email.includes('@')) return toast('Informe um e-mail válido.', true);
+  const btn = $('#btnEnviarLink');
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  try {
+    await Nuvem.enviarLink(email);
+    $('#statusNuvem').innerHTML =
+      `<span style="color:var(--acento)">Link enviado para ${email}.</span>
+       Abra o e-mail <b>neste aparelho</b> e clique no link — você volta para cá já conectado.`;
+  } catch (e) {
+    $('#statusNuvem').innerHTML = `<span style="color:var(--perigo)">${e.message}</span>`;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Receber link de acesso';
+  }
+});
+
+$('#btnSincronizarNuvem').addEventListener('click', () =>
+  sincronizarNuvem({ silencioso: false })
+);
+
+$('#btnSairNuvem').addEventListener('click', async () => {
+  if (!confirm('Sair da conta neste aparelho? Os bilhetes continuam gravados aqui.')) return;
+  await Nuvem.sair();
+  await renderNuvem();
+  toast('Desconectado. Os dados locais continuam intactos.');
+});
+
+/* ------------------------------------------------------------------ */
 /* Rotina automática                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -1522,6 +1689,12 @@ async function iniciar() {
   estado.premios = (await DB.getConfig('premios', {})) ?? {};
   $('#fonteProxy').value = await urlDoProxy();
 
+  iniciarResultados({
+    loteria,
+    historico: () => estado.historico,
+    toast,
+  });
+
   iniciarRetrospectiva({
     loteria,
     loteriaId: () => estado.loteriaId,
@@ -1541,9 +1714,18 @@ async function iniciar() {
     $('.aviso-honesto').style.display = 'none';
   }
 
+  // O link de acesso do e-mail devolve os tokens na própria URL.
+  try {
+    const volta = await Nuvem.capturarRetornoDoLink();
+    if (volta) toast(`Conectado${volta.email ? ` como ${volta.email}` : ''}.`);
+  } catch (e) { console.warn('[nuvem] retorno do link:', e.message); }
+
   montarSeletorLoteria();
   await trocarLoteria();
   renderConfig();
+  await renderNuvem();
+  prepararBotaoInstalar();
+  registrarServiceWorker({ aoAtualizar: mostrarFaixaAtualizacao });
 
   const primeiraVez = !(await DB.lerHistorico(estado.loteriaId));
   if (primeiraVez) toast('Primeira execução — baixando os resultados…');
@@ -1556,6 +1738,9 @@ async function iniciar() {
     toast('Pronto. Base de resultados carregada.');
     return;
   }
+
+  // Puxa o que o outro aparelho fez desde a última vez.
+  await sincronizarNuvem();
 
   const novos = saidas.reduce((a, x) => a + x.concursosNovos.length, 0);
   const boletim = saidas.find((x) => x.loteria === estado.loteriaId)?.boletim;

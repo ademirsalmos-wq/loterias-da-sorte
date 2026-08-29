@@ -22,6 +22,11 @@
 
 * { box-sizing: border-box; }
 
+/* O atributo `hidden` vale menos que qualquer regra com `display`.
+   Sem esta linha, `.botoes { display:flex }` fazia os botões da nuvem
+   aparecerem mesmo com hidden ligado. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -102,7 +107,10 @@ main { padding: 1.25rem; max-width: 1180px; margin: 0 auto; }
   display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
   gap: 1.1rem;
 }
-.painel-grid > .caixa { margin-bottom: 0; }
+/* min-width: 0 anula o padrão `auto` dos itens de grade. Sem isso, um filho
+   largo (o volante da Lotomania) empurra a coluna inteira e a página passa a
+   rolar de lado, mesmo que o filho já tenha rolagem própria. */
+.painel-grid > .caixa { margin-bottom: 0; min-width: 0; }
 .painel-grid + .painel-grid, .painel-grid + .caixa { margin-top: 1.1rem; }
 .grid-gerador { grid-template-columns: minmax(300px, 1fr) minmax(320px, 1.1fr); }
 
@@ -539,4 +547,135 @@ input[type=number].premio-input {
 
 @media (max-width: 720px) {
   .alerta-base { flex-direction: column; }
+}
+
+/* --------------------- faixa de nova versão ------------------------ */
+
+.faixa-atualizacao {
+  display: flex; gap: 1rem; align-items: center; justify-content: center;
+  flex-wrap: wrap;
+  background: var(--loteria);
+  color: #06131f;
+  padding: .6rem 1rem;
+  font-size: .87rem;
+  font-weight: 600;
+}
+.faixa-atualizacao .acoes { display: flex; gap: .6rem; align-items: center; }
+.faixa-atualizacao .btn.primario {
+  background: #06131f; border-color: #06131f; color: var(--loteria);
+  padding: .35rem .8rem;
+}
+.faixa-atualizacao .link { color: #06131f; opacity: .75; }
+
+/* =================== aba Resultados =================== */
+
+.grid-resultados { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+
+.cabecalho-resultado {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 1rem; flex-wrap: wrap; margin-bottom: .9rem;
+}
+.numero-concurso {
+  font-size: 1.35rem; font-weight: 700; line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.data-concurso { color: var(--texto-3); font-size: .82rem; text-transform: capitalize; }
+
+.navegacao { display: flex; gap: .3rem; align-items: center; }
+.navegacao .btn { padding: .4rem .6rem; font-size: .9rem; line-height: 1; }
+.navegacao input[type=number] {
+  width: 92px; text-align: center; padding: .4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.dezenas-linha {
+  display: flex; gap: .3rem; flex-wrap: wrap; margin-bottom: 1rem;
+}
+
+/* ---- o volante ---- */
+
+/* A Lotomania tem 10 colunas + a margem de totais. Em tela estreita isso
+   não cabe, e empurrar a página inteira para o lado seria pior que rolar só
+   a grade — daí o contêiner com rolagem própria. */
+.rolagem-volante { overflow-x: auto; margin-bottom: .6rem; max-width: 100%; }
+
+/* As colunas são `minmax(0, 46px)`: crescem até 46px onde cabe e encolhem
+   proporcionalmente onde não cabe. É o que faz as 10 colunas da Lotomania
+   aparecerem inteiras no celular, em vez de metade delas ficarem escondidas
+   atrás de uma rolagem lateral. */
+.volante-sorteio {
+  display: grid; gap: 4px; margin: 0;
+  justify-content: start; width: 100%;
+}
+.cel-volante {
+  aspect-ratio: 1;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--borda); border-radius: 8px;
+  background: var(--fundo);
+  color: var(--texto-3);
+  font-size: .8rem; font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  transition: .12s;
+}
+.cel-volante.marcada {
+  background: var(--loteria); border-color: var(--loteria);
+  color: #06131f;
+}
+/* Repetiu do concurso anterior: anel por fora, sem mudar a cor de fundo. */
+.cel-volante.repetida {
+  box-shadow: 0 0 0 2px var(--fundo), 0 0 0 4px var(--alerta);
+}
+.total-margem {
+  display: flex; align-items: center; justify-content: center;
+  font-size: .74rem; font-weight: 700;
+  color: var(--texto-3);
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+}
+.total-margem.canto { visibility: hidden; }
+
+.legenda-volante { margin-bottom: 1rem; }
+.anel-exemplo {
+  display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+  background: var(--loteria);
+  box-shadow: 0 0 0 1px var(--fundo-2), 0 0 0 3px var(--alerta);
+  vertical-align: middle; margin: 0 .35rem;
+}
+
+/* ---- características ---- */
+
+.caracteristicas {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px; background: var(--borda);
+  border: 1px solid var(--borda); border-radius: var(--raio);
+  overflow: hidden;
+}
+.caracteristicas > div {
+  background: var(--fundo); padding: .6rem .8rem;
+  display: flex; flex-direction: column; gap: .1rem;
+}
+.caracteristicas .rot {
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--texto-3); font-weight: 700;
+}
+.caracteristicas b { font-size: 1rem; font-variant-numeric: tabular-nums; }
+
+/* ---- lista ---- */
+
+.linha-concurso { cursor: pointer; }
+.linha-concurso:hover { background: rgba(255,255,255,.03); }
+.linha-concurso.ativa { background: rgba(255,255,255,.06); }
+.linha-concurso.ativa td:first-child { box-shadow: inset 3px 0 0 var(--loteria); }
+#listaConcursos .rolagem { max-height: 620px; overflow-y: auto; }
+#paginacao { justify-content: space-between; }
+
+@media (max-width: 860px) {
+  .grid-resultados { grid-template-columns: 1fr; }
+  #listaConcursos .rolagem { max-height: 420px; }
+}
+
+@media (max-width: 560px) {
+  .volante-sorteio { gap: 3px; }
+  .cel-volante { font-size: .72rem; border-radius: 6px; }
+  .total-margem { min-width: 18px; font-size: .68rem; }
 }

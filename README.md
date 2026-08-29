@@ -67,7 +67,12 @@ estatístico, sem filtro, com dezenas quentes, com dezenas frias: 1 em
    O único passo que continua sendo seu é o único que só você sabe: quanto o
    prêmio pagou de verdade.
 
-6. **Contabilidade honesta.**
+6. **Instalável no aparelho (PWA) e sincronizado entre eles.**
+   Vira ícone na tela inicial, abre sem barra de navegador e funciona sem
+   internet com os dados já baixados. Ligando o Supabase, o bilhete salvo no
+   PC aparece no celular e vice-versa.
+
+7. **Contabilidade honesta.**
    Quanto você gastou, quanto voltou, saldo, ROI, histórico por concurso. Na
    prática, é a parte que mais economiza dinheiro.
 
@@ -140,6 +145,11 @@ js/
   tickets.js        custos, conferência e balanço
   app.js            interface
   retro-ui.js       a aba Retrospectiva (separada para não inchar o app.js)
+  nuvem.js          sincronização entre aparelhos (Supabase via REST, sem SDK)
+  pwa.js            instalação e controle de versão do app
+sw.js               service worker (cache do app, nunca dos resultados)
+manifest.webmanifest
+icones/             ícones do PWA
 supabase/
   schema.sql        só é necessário se você ligar a sincronização em nuvem
 ```
@@ -333,3 +343,87 @@ prêmios menos do que arrecada, por definição. Este sistema serve para você
 apostar de forma organizada e consciente, não para ganhar dinheiro de forma
 sistemática. Se as apostas estiverem passando do que você pode perder sem
 prejuízo, o problema não se resolve com software.
+
+
+---
+
+## Instalar no aparelho (PWA)
+
+Em **Configurações → Instalar no aparelho**, ou pelo próprio navegador.
+No iPhone é manual: **Compartilhar → Adicionar à Tela de Início** (o Safari
+não oferece instalador automático).
+
+O service worker guarda o app para funcionar offline, mas com duas decisões
+deliberadas:
+
+**Nunca cacheia resultado de loteria.** Requisição para outro domínio passa
+direto. Um concurso cacheado seria pior que nenhum — o sistema inteiro já foi
+reconstruído uma vez por causa de dado velho servido como novo.
+
+**Rede primeiro, cache como reserva.** O padrão comum é "cache primeiro", que é
+mais rápido e faz o usuário continuar rodando código velho depois de você
+publicar uma correção. O app tem ~250 KB; rede primeiro custa milissegundos e
+elimina a dúvida "será que a versão nova subiu?". Quando há versão nova, uma
+faixa aparece no topo e **você** decide quando recarregar — nada de recarregar
+sozinho no meio de um fechamento.
+
+---
+
+## Sincronizar entre aparelhos
+
+Local-first: o **IndexedDB continua sendo a base de trabalho**, instantâneo e
+offline. O Supabase é um espelho que sincroniza por cima quando dá. Falar
+direto com o banco faria o app depender de internet para abrir uma tela.
+
+### Como ligar
+
+1. **Você provavelmente não precisa de um projeto novo.** O limite do plano
+   free é de 500 MB de banco, não de tabelas, e estes bilhetes ocupam alguns
+   kilobytes. Use um projeto que já existe. A tabela se chama
+   `loterias_bilhetes`, com prefixo justamente para conviver sem colidir com
+   as tabelas da aplicação que já mora ali.
+
+   (A documentação do Supabase diz apenas "limit of 2 active projects", sem
+   esclarecer se é por conta ou por organização — então não conte com a ideia
+   de criar uma organização nova para ganhar mais um. Se algum projeto estiver
+   parado, pausá-lo também libera uma vaga: o limite é de projetos ATIVOS.)
+2. Rode `supabase/schema.sql` no SQL Editor.
+3. Em **Project Settings → API**, copie a *Project URL* e a *anon public key*.
+4. No app: **Configurações → Sincronizar entre aparelhos → Configurar o
+   Supabase**, cole os dois e salve.
+5. Informe seu e-mail e clique em receber o link. Abra o e-mail **no mesmo
+   aparelho** e clique — você volta ao app já conectado.
+6. Repita o passo 5 no outro aparelho, com o mesmo e-mail.
+
+Login por link, sem senha: nada para criar, nada para guardar, nada para vazar.
+
+### Três detalhes de desenho
+
+**UUID em vez de id sequencial.** Com dois aparelhos, dois contadores
+independentes gerariam o id 1 nos dois e um sobrescreveria o outro na nuvem,
+em silêncio. A migração de bases antigas é automática e guarda o id anterior.
+
+**Apagar é marcar, não sumir.** Sem essa lápide, o aparelho que não viu a
+exclusão devolveria o bilhete na sincronização seguinte.
+
+**A sincronização puxa tudo, sempre.** A versão incremental (só o que mudou
+desde a última vez) foi implementada, testada e **descartada por estar errada**:
+
+> o celular edita um bilhete às 15h00 · o PC sincroniza às 15h01, movendo seu
+> cursor · o celular só consegue enviar às 15h02, com a data 15h00 · o PC pede
+> "o que mudou depois de 15h01" e o registro fica invisível para sempre.
+
+O cursor mede o relógio de quem sincroniza; a data mede quando o outro editou.
+Comparar os dois é a origem do buraco. Puxar tudo custa alguns KB e elimina
+uma classe inteira de bug silencioso. O envio continua incremental, porque ali
+comparamos o nosso relógio com as nossas próprias datas.
+
+**Conflito** se resolve pela data mais recente, em qualquer direção. Testado
+com dois aparelhos simulados: criação, edição cruzada, edição simultânea do
+mesmo bilhete, exclusão propagada e sincronizações repetidas sem duplicar.
+
+### O que não sobe
+
+O histórico de concursos. São ~10 mil registros públicos, iguais para todo
+mundo, que cada aparelho busca da Caixa em segundos. Guardá-los no banco só
+gastaria cota sem benefício.

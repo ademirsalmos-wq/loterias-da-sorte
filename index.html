@@ -7,8 +7,16 @@
 <title>Loterias da Sorte</title>
 <link rel="stylesheet" href="css/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍀</text></svg>">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icones/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Loterias">
 </head>
 <body>
+
+<div id="faixaAtualizacao" hidden></div>
 
 <header class="topo">
   <div class="marca">
@@ -24,6 +32,7 @@
 
 <nav class="abas" id="abas">
   <button class="aba ativa" data-alvo="painel">Painel</button>
+  <button class="aba" data-alvo="resultados">Resultados</button>
   <button class="aba" data-alvo="estatisticas">Estatísticas</button>
   <button class="aba" data-alvo="gerador">Gerador</button>
   <button class="aba" data-alvo="fechamento">Fechamento</button>
@@ -78,6 +87,24 @@
   <div class="caixa">
     <h2>Balanço das suas apostas</h2>
     <div id="balancoPainel" class="vazio">Nenhum bilhete cadastrado ainda.</div>
+  </div>
+</section>
+
+<!-- ========================== RESULTADOS ========================== -->
+<section id="resultados" class="tela">
+  <div class="painel-grid grid-resultados">
+    <div class="caixa">
+      <div id="resultadoAtual" class="vazio">Carregando…</div>
+    </div>
+
+    <div class="caixa">
+      <div class="cabecalho-flex">
+        <h2>Todos os concursos</h2>
+        <input type="number" id="buscaConcurso" placeholder="ir para o nº…" style="width:140px">
+      </div>
+      <div id="listaConcursos"></div>
+      <div class="botoes" id="paginacao"></div>
+    </div>
   </div>
 </section>
 
@@ -485,9 +512,64 @@
   </div>
 
   <div class="caixa">
+    <h2>Sincronizar entre aparelhos</h2>
+    <p class="nota">Seus bilhetes ficam gravados no navegador de cada aparelho.
+      Ligando a nuvem, o que você salva no PC aparece no celular e vice-versa.
+      O histórico de concursos <b>não</b> sobe — cada aparelho busca da Caixa
+      em segundos, e ocupar banco com dado público não faria sentido.</p>
+
+    <div id="estadoNuvem"></div>
+
+    <details class="filtros" id="detalhesNuvem">
+      <summary>Configurar o Supabase</summary>
+      <p class="nota">Crie um projeto (uma organização free nova, se as suas
+        duas já estão ocupadas), rode o <code>supabase/schema.sql</code> no SQL
+        Editor e cole abaixo os dados de <b>Project Settings → API</b>.</p>
+      <div class="campo">
+        <label>Project URL</label>
+        <input type="text" id="nuvemUrl" placeholder="https://xxxx.supabase.co">
+      </div>
+      <div class="campo">
+        <label>Chave anônima (anon public)</label>
+        <input type="text" id="nuvemChave" placeholder="eyJhbGci…">
+        <span class="nota">Esta chave é feita para ficar visível no navegador —
+          quem protege os dados são as políticas de RLS do schema.</span>
+      </div>
+      <button class="btn" id="btnSalvarNuvem">Salvar</button>
+    </details>
+
+    <div id="loginNuvem" hidden>
+      <div class="campo">
+        <label>Seu e-mail</label>
+        <input type="text" id="nuvemEmail" placeholder="voce@exemplo.com">
+        <span class="nota">Você recebe um link de acesso. Sem senha para criar
+          nem guardar — abra o link neste aparelho e pronto.</span>
+      </div>
+      <button class="btn primario" id="btnEnviarLink">Receber link de acesso</button>
+    </div>
+
+    <div class="botoes" id="acoesNuvem" hidden>
+      <button class="btn primario" id="btnSincronizarNuvem">Sincronizar agora</button>
+      <button class="btn fantasma" id="btnSairNuvem">Sair desta conta</button>
+    </div>
+    <p class="nota" id="statusNuvem"></p>
+  </div>
+
+  <div class="caixa" id="caixaInstalar" hidden>
+    <h2>Instalar no aparelho</h2>
+    <p class="nota">Instalando, o sistema vira um ícone na tela inicial, abre
+      sem a barra do navegador e funciona sem internet — os resultados já
+      baixados continuam disponíveis.</p>
+    <button class="btn primario" id="btnInstalar">Instalar</button>
+    <p class="nota" id="dicaInstalar"></p>
+  </div>
+
+  <div class="caixa">
     <h2>Seus dados</h2>
-    <p class="nota">Tudo fica gravado no seu navegador (IndexedDB). Nada é enviado
-      para lugar nenhum. Faça backup de vez em quando.</p>
+    <p class="nota">Tudo fica gravado no navegador deste aparelho (IndexedDB).
+      Se você ligou a sincronização acima, os <b>bilhetes</b> também ficam no seu
+      projeto Supabase — mais nada sai daqui. O backup abaixo é local e sempre vale
+      a pena, principalmente antes de limpar dados do navegador.</p>
     <div class="botoes">
       <button class="btn" id="btnBackup">Baixar backup</button>
       <label class="btn fantasma arquivo">
