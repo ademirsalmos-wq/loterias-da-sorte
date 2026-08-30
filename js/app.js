@@ -49,6 +49,8 @@ const estado = {
   cenarioManual: false,
   garantiaManual: false,
   trocouLoteria: true,
+  /** Mensagem da última falha de sincronização, ou null. */
+  erroNuvem: null,
   trocouRetro: true,
   infoBase: null,
   diagnostico: null,
@@ -208,6 +210,10 @@ function montarSeletorLoteria() {
 /* ------------------------------------------------------------------ */
 
 async function trocarLoteria() {
+  /* `montarOpcoesGerador()` CONSOME e zera `estado.trocouLoteria`, e roda
+     antes de `preencherConcursoAlvo()`. Guardar aqui é o que faz o campo de
+     concurso alvo saber que a modalidade mudou. */
+  const trocou = estado.trocouLoteria;
   const hist = await carregarHistorico(estado.loteriaId);
   estado.historico = hist.concursos;
   estado.atualizadoEm = hist.atualizadoEm;
@@ -223,7 +229,7 @@ async function trocarLoteria() {
   montarVolanteFechamento();
   montarOpcoesGerador();
   montarOpcoesFechamento();
-  preencherConcursoAlvo();
+  preencherConcursoAlvo({ trocouLoteria: trocou });
   renderAlertaBase();
   atualizarResultados();
   await renderBilhetes();
@@ -235,6 +241,12 @@ async function trocarLoteria() {
 
 async function sincronizarLoteria(id, silencioso = false) {
   const btn = $('#btnSincronizar');
+  /* Guardar o rótulo em vez de escrever um fixo no `finally`.
+     Havia um "Atualizar resultados" cravado ali, mas o botão do Painel se
+     chama "Verificar agora" — então usar "Baixar tudo de novo" nas
+     Configurações RENOMEAVA o botão do Painel, permanentemente, sem o
+     usuário estar sequer olhando para ele. */
+  const rotulo = btn?.textContent ?? 'Verificar agora';
   if (btn) { btn.disabled = true; btn.textContent = 'Baixando…'; }
   try {
     const r = await sincronizar(id, (m) => { if (!silencioso) $('#notaSync').textContent = m; });
@@ -244,7 +256,7 @@ async function sincronizarLoteria(id, silencioso = false) {
     toast(e.message, true);
     return null;
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Atualizar resultados'; }
+    if (btn) { btn.disabled = false; btn.textContent = rotulo; }
     if (!silencioso) $('#notaSync').textContent = '';
   }
 }
@@ -278,7 +290,7 @@ async function renderPainel() {
 
   /* último sorteio */
   if (!estado.historico.length) {
-    $('#ultimoSorteio').innerHTML = '<p class="vazio">Base vazia — clique em "Atualizar resultados".</p>';
+    $('#ultimoSorteio').innerHTML = '<p class="vazio">Base vazia — clique em "Verificar agora", logo abaixo.</p>';
   } else {
     const u = estado.historico[estado.historico.length - 1];
     $('#ultimoSorteio').innerHTML = `
@@ -488,13 +500,22 @@ function proximoConcurso() {
  * não tem contra o que ser conferido. O botão "Conferir todos" ficava sem
  * nada para fazer e parecia quebrado.
  */
-function preencherConcursoAlvo() {
+function preencherConcursoAlvo({ trocouLoteria = false } = {}) {
   const prox = proximoConcurso();
   for (const sel of ['#concursoAlvoGerador', '#concursoAlvoFech']) {
     const el = $(sel);
     if (!el) continue;
     el.placeholder = prox ? `${prox}` : 'ex.: 3450';
-    if (!el.value && prox) el.value = prox;
+    /* Ao TROCAR de modalidade o número tem de ser reescrito, não preservado.
+       Antes só preenchia quando o campo estava vazio — e como ele já vinha
+       preenchido da primeira carga, trocar da Lotofácil para a Mega-Sena
+       deixava lá o 3.451 da Lotofácil. Os bilhetes eram salvos apontando
+       para um concurso da Mega-Sena que só sai daqui a anos (ficam
+       "valendo" para sempre, nunca conferidos), ou, no sentido inverso,
+       para um concurso da Lotofácil que já saiu — e aí entram no balanço
+       como dinheiro gasto num sorteio antigo, com acertos aleatórios.
+       Tudo em silêncio, porque o placeholder é invisível quando há valor. */
+    if (prox && (trocouLoteria || !el.value)) el.value = prox;
   }
   const man = $('#concursoManual');
   if (man && prox) man.placeholder = `${prox - 1}`;
@@ -891,12 +912,32 @@ function montarOpcoesFechamento() {
   const l = loteria();
   const n = estado.volanteFechamento.size;
 
-  if (!l.fechamentoDisponivel) {
+  /* Quando o fechamento não se aplica, esta função retornava ANTES de
+     reconstruir os selects — e eles ficavam exibindo os valores da
+     modalidade anterior. Na Lotomania a tela mostrava "15 dezenas —
+     R$ 3,50 cada" (preço e tamanho da Lotofácil) ao lado de um aviso
+     dizendo que fechamento não se aplica ali. A tela se contradizendo de
+     novo, e ainda por cima com número de outra loteria.
+     Agora os controles somem: não há parâmetro a escolher se não há
+     fechamento a montar. */
+  const disponivel = l.fechamentoDisponivel;
+  $('#parametrosFechamento').hidden = !disponivel;
+  $('#acoesFechamento').hidden = !disponivel;
+  $('#btnFechar').hidden = !disponivel;
+  $('#notaFechamentoLento').hidden = !disponivel;
+  $('#caixaResultadoFechamento').hidden = $('#caixaResultadoFechamento').hidden || !disponivel;
+
+  const semVolante = $('#semFechamentoVolante');
+  semVolante.hidden = disponivel;
+
+  if (!disponivel) {
+    semVolante.textContent =
+      `A ${l.nome} não usa fechamento — não há volante a preencher aqui.`;
     $('#previaFechamento').innerHTML =
       `<b>Fechamento não se aplica à ${l.nome}.</b><br>
        Você marca ${l.marcarMin} dezenas de ${l.universo} — o número de cenários a cobrir
        é astronômico e nenhum conjunto de bilhetes viável garante nada.
-       Use o Gerador com filtros para esta modalidade.`;
+       Use o <b>Gerador</b> com filtros para esta modalidade.`;
     $('#btnFechar').disabled = true;
     return;
   }
@@ -909,7 +950,14 @@ function montarOpcoesFechamento() {
     const { custo } = custoAposta(l, j, precoDe(l));
     selJogo.insertAdjacentHTML('beforeend', `<option value="${j}">${j} dezenas — ${brl(custo)} cada</option>`);
   }
-  selJogo.value = antesJogo && antesJogo <= l.marcarMax ? antesJogo : l.marcarMin;
+  /* Comparar com `l.marcarMax` era errado: as opções param no MENOR entre
+     `marcarMax` e o tamanho do volante. Com o volante menor que o valor
+     anterior, o `value` atribuído não existia entre as opções, o navegador
+     punha string vazia, e `Number('')` é ZERO — que passou por todas as
+     guardas e chegou ao motor de fechamento. Comparar com o teto REAL das
+     opções, e cair no mínimo quando não couber. */
+  const tetoJogo = Math.min(l.marcarMax, Math.max(n, l.marcarMin));
+  selJogo.value = antesJogo >= l.marcarMin && antesJogo <= tetoJogo ? antesJogo : l.marcarMin;
 
   const selCen = $('#fechCenario');
   const antesCen = Number(selCen.value);
@@ -923,7 +971,11 @@ function montarOpcoesFechamento() {
   }
   // Só respeita a escolha anterior se ela foi feita de propósito — senão o
   // valor "gruda" enquanto o volante cresce e vira outra coisa sem avisar.
-  selCen.value = estado.cenarioManual && antesCen && antesCen <= maxT ? antesCen : maxT;
+  /* Mesma armadilha do outro lado: as opções vão de `maxT` até
+     `max(1, maxT - 5)`, então um valor anterior ABAIXO desse piso também
+     some da lista e zera o select. */
+  const pisoCen = Math.max(1, maxT - 5);
+  selCen.value = estado.cenarioManual && antesCen >= pisoCen && antesCen <= maxT ? antesCen : maxT;
 
   atualizarGarantias();
 }
@@ -955,7 +1007,8 @@ function atualizarGarantias() {
   }
   // Mesma história do cenário: sem o flag, o valor antigo gruda enquanto o
   // volante cresce e o usuário acaba com uma garantia que ele nunca escolheu.
-  selG.value = estado.garantiaManual && antes && antes <= teto ? antes : preferida;
+  const pisoG = Math.max(1, teto - 4);
+  selG.value = estado.garantiaManual && antes >= pisoG && antes <= teto ? antes : preferida;
 
   atualizarPrevia();
 }
@@ -1176,7 +1229,13 @@ async function renderBilhetes() {
   let lista = todos;
   if (soPremiados) lista = lista.filter((b) => b.premiado);
   if (filtroConc) lista = lista.filter((b) => Number(b.concurso) === Number(filtroConc));
-  lista = [...lista].sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
+  /* Ordenar id com subtração era resquício do id numérico: subtrair dois
+     UUIDs dá NaN, o comparador devolve NaN para todo par, e o `sort` não
+     reordena nada — a lista saía na ordem lexicográfica dos UUIDs, que é
+     aleatória. O usuário cadastrava um bilhete, olhava o topo da tabela e
+     não o encontrava. A intenção sempre foi "mais novo primeiro". */
+  lista = [...lista].sort((a, b) =>
+    (b.criadoEm ?? '').localeCompare(a.criadoEm ?? ''));
 
   const b = balanco(todos);
   $('#balancoBilhetes').innerHTML = todos.length
@@ -1255,9 +1314,14 @@ async function renderBilhetes() {
       }).join('')}
     </tbody></table></div>`;
 
+  /* O id é um UUID em TEXTO desde a migração para a sincronização entre
+     aparelhos. Aqui havia `Number(...)`, sobra da época do id sequencial:
+     `Number('7eb99ae3-…')` é NaN, o registro nunca era encontrado, e as três
+     ações abaixo falhavam em silêncio absoluto — sem erro no console, sem
+     aviso na tela, sem nada. Nunca converter este id. */
   $$('#tabelaBilhetes .apagar').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
-      const id = Number(e.target.closest('tr').dataset.id);
+      const id = e.target.closest('tr').dataset.id;
       await DB.apagarBilhete(id);
       await renderBilhetes();
       await renderPainel();
@@ -1266,7 +1330,7 @@ async function renderBilhetes() {
 
   $$('#tabelaBilhetes .concurso-input').forEach((inp) => {
     inp.addEventListener('change', async (e) => {
-      const id = Number(e.target.closest('tr').dataset.id);
+      const id = e.target.closest('tr').dataset.id;
       const alvo = todos.find((x) => x.id === id);
       if (!alvo) return;
       const valor = e.target.value === '' ? null : Number(e.target.value);
@@ -1284,7 +1348,7 @@ async function renderBilhetes() {
 
   $$('#tabelaBilhetes .premio-input').forEach((inp) => {
     inp.addEventListener('change', async (e) => {
-      const id = Number(e.target.closest('tr').dataset.id);
+      const id = e.target.closest('tr').dataset.id;
       const alvo = todos.find((x) => x.id === id);
       if (!alvo) return;
       alvo.premio = Number(e.target.value) || 0;
@@ -1463,10 +1527,31 @@ function baixar(nome, conteudo, tipo = 'application/json') {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/**
+ * O que PODE sair num backup.
+ *
+ * Antes daqui saía `todasConfigs()` inteiro — e dentro dele ia
+ * `nuvem:sessao`, com o **refresh token** do Firebase. Esse token troca-se
+ * por um token de acesso novo a qualquer momento, então o arquivo que a
+ * própria tela recomenda baixar dava acesso completo à conta a quem o
+ * abrisse: pasta de Downloads, pen drive, anexo de e-mail, sincronizador.
+ *
+ * E o pior: o restore nunca usou essa sessão para nada. Era vazamento sem
+ * contrapartida.
+ *
+ * Lista de permissão, não de bloqueio: uma configuração nova que apareça
+ * amanhã fica de fora até alguém decidir que ela pode sair.
+ */
+const CONFIGS_NO_BACKUP = ['precos', 'premios', 'avisoLido'];
+
 $('#btnBackup').addEventListener('click', async () => {
-  const bilhetes = await DB.listarBilhetes();
-  const configs = await DB.todasConfigs();
-  const dump = { versao: 1, criadoEm: new Date().toISOString(), bilhetes, configs };
+  const bilhetes = await DB.listarBilhetes(null, true);   // com lápides, para não ressuscitar exclusões
+  const todas = await DB.todasConfigs();
+  const configs = {};
+  for (const chave of CONFIGS_NO_BACKUP) {
+    if (todas[chave] !== undefined) configs[chave] = todas[chave];
+  }
+  const dump = { versao: 2, criadoEm: new Date().toISOString(), bilhetes, configs };
   baixar(`backup-loterias-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(dump, null, 2));
   toast('Backup baixado.');
 });
@@ -1476,14 +1561,40 @@ $('#arquivoBackup').addEventListener('change', async (e) => {
   if (!arq) return;
   try {
     const dump = JSON.parse(await arq.text());
-    if (Array.isArray(dump.bilhetes) && dump.bilhetes.length) {
-      await DB.salvarBilhetes(dump.bilhetes.map(({ id, ...resto }) => resto));
+
+    /* Qualquer JSON válido passava por aqui e saía com "Backup restaurado:
+       0 bilhete(s)" — mensagem de sucesso para uma operação que não fez
+       nada. Escolher o arquivo errado é o caminho natural, não a exceção. */
+    if (!Array.isArray(dump.bilhetes)) {
+      return toast('Este arquivo não é um backup do Loterias da Sorte.', true);
     }
+
+    /* PRESERVAR O ID é o ponto todo.
+       Antes o id era descartado (`({ id, ...resto })`) e o `_preparar` do
+       db.js gerava um novo para cada registro. Restaurar um backup no
+       aparelho que o gerou — o caso mais comum, "vou limpar o cache" —
+       DOBRAVA a carteira: 120 bilhetes viravam 240, o investido dobrava, o
+       balanço virava ficção, e as cópias ainda subiam para a nuvem e se
+       espalhavam para o outro aparelho, de onde não há desfazer.
+       Com o id preservado, restaurar é reconciliação: quem já existe é
+       atualizado, quem sumiu volta. */
+    const bilhetes = dump.bilhetes.filter((b) => b && b.id && Array.isArray(b.dezenas));
+    const semId = dump.bilhetes.length - bilhetes.length;
+    if (bilhetes.length) await DB.salvarBilhetes(bilhetes);
+
+    /* O backup gravava `configs` inteiro mas o restore só lia `precos`:
+       as estimativas de rateio que o usuário digitou uma a uma na
+       Retrospectiva eram lidas do arquivo e jogadas fora, caladas. */
     if (dump.configs?.precos) {
       estado.precos = dump.configs.precos;
       await DB.setConfig('precos', estado.precos);
     }
-    toast(`Backup restaurado: ${dump.bilhetes?.length ?? 0} bilhete(s).`);
+    if (dump.configs?.premios) await DB.setConfig('premios', dump.configs.premios);
+
+    toast(
+      `Backup restaurado: ${bilhetes.length} bilhete(s).` +
+      (semId ? ` ${semId} registro(s) sem identificação foram ignorados.` : '')
+    );
     await trocarLoteria();
     renderConfig();
   } catch (err) {
@@ -1562,25 +1673,117 @@ async function renderNuvem() {
   const configurada = await Nuvem.estaConfigurada();
   const sessao = await Nuvem.sessaoAtual();
   const ultima = await Nuvem.ultimaSincronizacao();
+  const dentro = Boolean(sessao);
 
-  /* Três estados que se excluem: sem chaves, deslogado, conectado. */
+  /* ---- cabeçalho ---- */
+  $('#btnAbrirLogin').hidden = dentro;
+  $('#chipConta').hidden = !dentro;
+
+  /* ---- janela de login ---- */
   $('#nuvemSemChaves').hidden = configurada;
-  $('#loginNuvem').hidden = !configurada || Boolean(sessao);
-  $('#nuvemConectado').hidden = !sessao;
-  if (!sessao) $('#trocaSenha').hidden = true;
+  $('#loginNuvem').hidden = !configurada;
 
-  if (!sessao) return;
+  /* ---- aba Configurações ---- */
+  $('#nuvemDeslogado').hidden = dentro;
+  $('#nuvemConectado').hidden = !dentro;
+  if (!dentro) $('#trocaSenha').hidden = true;
+
+  /* Quantos bilhetes existem só neste aparelho. Deslogado, é o número que
+     responde "o que eu perco se limpar o navegador?" — e é o argumento
+     honesto para criar conta, melhor que qualquer texto de propaganda. */
+  const locais = (await DB.listarBilhetes(null, true)).filter((b) => !b.removido).length;
+  const aviso = $('#avisoLocal');
+  if (aviso) {
+    aviso.innerHTML = locais
+      ? `Você tem <b>${locais} bilhete(s)</b> guardado(s) só neste aparelho.
+         Ao entrar, eles sobem para a sua conta — nada se perde.`
+      : 'Sem conta o sistema funciona igual: gerar, conferir, tudo. A conta serve ' +
+        'para os bilhetes acompanharem você no outro aparelho.';
+  }
+
+  if (!dentro) return;
 
   const email = sessao.email ?? 'sua conta';
+  const inicial = email.trim().charAt(0) || '?';
   $('#emailConta').textContent = email;
-  $('#avatarConta').textContent = email.trim().charAt(0) || '?';
-  $('#ultimaSync').textContent = ultima
+  $('#avatarConta').textContent = inicial;
+  $('#avatarTopo').textContent = inicial;
+  $('#emailTopo').textContent = email;
+
+  const quando = ultima
     ? `última sincronização: ${new Date(ultima).toLocaleString('pt-BR')}`
     : 'ainda não sincronizou neste aparelho';
+
+  /* O selo dizia "sincronizado" sempre que EXISTISSE uma sincronização
+     bem-sucedida em algum momento — inclusive semanas atrás. Como as duas
+     que mais importam rodam em silêncio (ao salvar e ao abrir o app), uma
+     falha persistente só aparecia no console. */
   const selo = $('#seloSync');
-  selo.textContent = ultima ? 'sincronizado' : 'pendente';
-  selo.dataset.estado = ultima ? 'ok' : 'pendente';
+  const ponto = $('#pontoSync');
+  const chip = $('#chipConta');
+  if (estado.erroNuvem) {
+    selo.textContent = 'com erro';
+    selo.dataset.estado = 'pendente';
+    ponto.dataset.estado = 'erro';
+    chip.title = `Sincronização com erro: ${estado.erroNuvem}`;
+    $('#ultimaSync').innerHTML =
+      `<span style="color:var(--perigo)">A última tentativa falhou: ${estado.erroNuvem}</span>`;
+  } else {
+    selo.textContent = ultima ? 'sincronizado' : 'pendente';
+    selo.dataset.estado = ultima ? 'ok' : 'pendente';
+    ponto.dataset.estado = ultima ? 'ok' : 'pendente';
+    chip.title = `${email} — ${quando}`;
+    $('#ultimaSync').textContent = quando;
+  }
 }
+
+/* ------------------------------------------------------------------ */
+/* Janela de login                                                     */
+/* ------------------------------------------------------------------ */
+
+let focoAntesDoModal = null;
+
+async function abrirLogin() {
+  focoAntesDoModal = document.activeElement;
+  /* Recontar ANTES de mostrar. O aviso "você tem N bilhetes só neste
+     aparelho" é o argumento honesto para criar conta, e um número velho
+     (ou o texto genérico) desperdiça exatamente o momento em que ele
+     importa: o usuário acabou de salvar bilhetes e clicou em Entrar. */
+  await renderNuvem();
+  $('#modalLogin').hidden = false;
+  document.body.style.overflow = 'hidden';
+  limparRecado();
+  ($('#nuvemEmail').value ? $('#nuvemSenha') : $('#nuvemEmail')).focus();
+}
+
+function fecharLogin() {
+  $('#modalLogin').hidden = true;
+  document.body.style.overflow = '';
+  $('#nuvemSenha').value = '';
+  $('#forcaSenha').hidden = true;
+  limparRecado();
+  focoAntesDoModal?.focus?.();
+}
+
+$('#btnAbrirLogin').addEventListener('click', abrirLogin);
+$('#btnEntrarConfig').addEventListener('click', abrirLogin);
+/* Clicar no chip com a conta aberta leva às Configurações, onde ficam
+   sincronizar, trocar senha e sair. */
+$('#chipConta').addEventListener('click', () => {
+  $$('.aba').forEach((a) => a.classList.remove('ativa'));
+  $$('.tela').forEach((t) => t.classList.remove('ativa'));
+  $('.aba[data-alvo="config"]').classList.add('ativa');
+  $('#config').classList.add('ativa');
+  $('#nuvemConectado').scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+$('#btnFecharLogin').addEventListener('click', fecharLogin);
+/* Clique no fundo escuro fecha; clique dentro da janela, não. */
+$('#modalLogin').addEventListener('click', (ev) => {
+  if (ev.target === $('#modalLogin')) fecharLogin();
+});
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && !$('#modalLogin').hidden) fecharLogin();
+});
 
 /** Sincroniza sem atrapalhar: falha de rede aqui não pode quebrar nada. */
 async function sincronizarNuvem({ silencioso = true, completa = false } = {}) {
@@ -1597,6 +1800,7 @@ async function sincronizarNuvem({ silencioso = true, completa = false } = {}) {
       await renderEmAberto();
       await atualizarRetrospectiva();
     }
+    estado.erroNuvem = null;
     if (!silencioso) {
       toast(
         `Nuvem: ${r.enviados} enviado(s), ${r.aplicados} recebido(s) deste aparelho.`
@@ -1605,8 +1809,12 @@ async function sincronizarNuvem({ silencioso = true, completa = false } = {}) {
     await renderNuvem();
     return r;
   } catch (e) {
+    /* Guardar o erro mesmo no modo silencioso: silencioso quer dizer "não
+       interrompe o que o usuário está fazendo", não "esconde para sempre". */
+    estado.erroNuvem = semTags(e.message);
     if (!silencioso) toast(`Nuvem: ${e.message}`, true);
     else console.warn('[nuvem]', e.message);
+    await renderNuvem();
     return null;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Sincronizar agora'; }
@@ -1731,11 +1939,29 @@ $('#formConta').addEventListener('submit', async (ev) => {
       if (modoConta === 'criar') await Nuvem.criarConta(email, senha);
       else await Nuvem.entrarComSenha(email, senha);
     });
-    $('#nuvemSenha').value = '';
-    $('#forcaSenha').hidden = true;
+    /* Quantos bilhetes existiam SÓ aqui antes de entrar — para poder dizer
+       ao usuário o que aconteceu com eles, em vez de sincronizar em
+       silêncio e deixá-lo adivinhar. */
+    const locaisAntes = (await DB.listarBilhetes(null, true)).filter((b) => !b.removido).length;
+
+    fecharLogin();
     await renderNuvem();
-    toast(modoConta === 'criar' ? 'Conta criada e conectada.' : 'Conectado.');
-    await sincronizarNuvem({ silencioso: false });
+
+    /* `completa: true` ignora o cursor e envia TUDO o que está no aparelho.
+       É o que faz o trabalho feito antes do login subir junto — a promessa
+       de "use sem conta, entre quando quiser, nada se perde". */
+    const r = await sincronizarNuvem({ silencioso: true, completa: true });
+
+    if (modoConta === 'criar') {
+      toast(locaisAntes
+        ? `Conta criada. ${locaisAntes} bilhete(s) deste aparelho foram para a sua conta.`
+        : 'Conta criada e conectada.');
+    } else {
+      const veio = r?.aplicados ?? 0;
+      toast(veio
+        ? `Conectado. ${veio} bilhete(s) vieram da sua conta.`
+        : (locaisAntes ? `Conectado. ${locaisAntes} bilhete(s) deste aparelho foram para a sua conta.` : 'Conectado.'));
+    }
   } catch (e) {
     recado(e.message);
   }
@@ -1771,7 +1997,10 @@ $('#btnTrocarSenha').addEventListener('click', async () => {
     $('#trocaSenha').hidden = true;
     toast('Senha alterada.');
   } catch (e) {
-    $('#statusNuvem').innerHTML = `<span style="color:var(--perigo)">${e.message}</span>`;
+    /* Antes isto escrevia em `#statusNuvem`, um parágrafo abaixo de todo o
+       cartão — podia nascer fora da tela, e nada no arquivo o limpava
+       depois: o erro ficava lá mesmo após uma troca bem-sucedida. */
+    toast(e.message, true);
   }
 });
 

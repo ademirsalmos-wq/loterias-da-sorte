@@ -60,7 +60,93 @@ code {
 .trevo { font-size: 1.9rem; line-height: 1; }
 .sub { margin: 0; color: var(--texto-3); font-size: .8rem; }
 
+.topo-direita {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .seletor-loteria { display: flex; gap: .4rem; flex-wrap: wrap; }
+
+/* ---- estado da conta no cabeçalho ---- */
+
+.btn-entrar {
+  border: 1px solid var(--loteria); background: transparent; color: var(--loteria);
+  padding: .45rem 1.1rem; border-radius: 999px; cursor: pointer;
+  font: inherit; font-size: .85rem; font-weight: 700; transition: .15s;
+}
+.btn-entrar:hover { background: var(--loteria); color: #06131f; }
+
+.chip-conta {
+  display: flex; align-items: center; gap: .5rem;
+  border: 1px solid var(--borda); background: var(--fundo-2);
+  padding: .3rem .7rem .3rem .35rem; border-radius: 999px;
+  cursor: pointer; font: inherit; color: var(--texto-2);
+  max-width: 230px; transition: .15s;
+}
+.chip-conta:hover { border-color: var(--texto-3); color: var(--texto); }
+.avatar-mini {
+  width: 26px; height: 26px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--loteria); color: #06131f;
+  font-weight: 800; font-size: .82rem; text-transform: uppercase;
+}
+.email-topo {
+  font-size: .8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Um ponto vale mais que uma palavra num cabeçalho: verde sincronizado,
+   âmbar pendente, vermelho com erro. O título explica ao passar o mouse. */
+.ponto-sync {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--acento);
+}
+.ponto-sync[data-estado="pendente"] { background: var(--alerta); }
+.ponto-sync[data-estado="erro"] { background: var(--perigo); }
+
+/* ---- janela de login ---- */
+
+.fundo-modal {
+  position: fixed; inset: 0; z-index: 60;
+  background: rgba(4, 8, 14, .78);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1.2rem; overflow-y: auto;
+  animation: aparecer .16s ease-out;
+}
+@keyframes aparecer { from { opacity: 0 } to { opacity: 1 } }
+
+.modal {
+  position: relative; width: 100%; max-width: 430px;
+  background: var(--fundo-2); border: 1px solid var(--borda);
+  border-radius: var(--raio); padding: 1.5rem;
+  box-shadow: 0 24px 60px rgba(0,0,0,.55);
+  animation: subir .18s ease-out;
+}
+@keyframes subir { from { transform: translateY(10px) } to { transform: none } }
+
+.fechar-modal {
+  position: absolute; top: .7rem; right: .7rem;
+  background: none; border: 0; cursor: pointer;
+  color: var(--texto-3); font-size: 1rem; line-height: 1;
+  padding: .35rem .5rem; border-radius: 8px;
+}
+.fechar-modal:hover { color: var(--texto); background: rgba(255,255,255,.06); }
+
+.cabecalho-modal { display: flex; gap: .8rem; margin-bottom: 1.2rem; }
+.cabecalho-modal h2 { margin: 0 0 .25rem; font-size: 1.15rem; }
+.cabecalho-modal .nota { margin: 0; }
+.cabecalho-modal .trevo { font-size: 1.6rem; }
+
+.rodape-modal {
+  margin: 1rem 0 0; padding-top: .9rem;
+  border-top: 1px solid var(--borda);
+}
+
+/* Dentro da janela o cartão não precisa de moldura própria. */
+.modal .cartao-login { max-width: none; border: 0; padding: 0; background: none; }
+
+@media (max-width: 560px) {
+  .topo-direita { width: 100%; justify-content: space-between; }
+  .modal { padding: 1.1rem; }
+  .email-topo { display: none; }   /* no celular, só a inicial e o ponto */
+}
 .chip-loteria {
   border: 1px solid var(--borda); background: var(--fundo-2);
   color: var(--texto-2); padding: .45rem .9rem;
@@ -819,3 +905,18 @@ input[type=number].premio-input {
   .cel-volante { font-size: .72rem; border-radius: 6px; }
   .total-margem { min-width: 18px; font-size: .68rem; }
 }
+
+
+/* =================== duelo entre estratégias =================== */
+
+.tabela.duelo td:first-child { color: var(--texto-2); }
+.tabela.duelo td:nth-child(2),
+.tabela.duelo th:nth-child(2),
+.tabela.duelo td:nth-child(3),
+.tabela.duelo th:nth-child(3) {
+  text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.tabela.duelo th:nth-child(2), .tabela.duelo th:nth-child(3) { max-width: 190px; }
+/* Uma linha vazia separa os três blocos — custo, desempenho, dinheiro —
+   sem precisar de três tabelas. */
+.tabela.duelo tr.separador td { padding: .25rem 0; border: 0; }

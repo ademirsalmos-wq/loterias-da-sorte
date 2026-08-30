@@ -101,28 +101,76 @@ async function atualizarFonte() {
   await atualizarResumoFonte();
 }
 
-async function obterJogos() {
+/**
+ * Lê os jogos de uma das fontes. Parametrizado porque agora existem DUAS:
+ * a estratégia principal e a que ela enfrenta.
+ */
+async function obterJogos({ fonte, idTexto, idErros, idLote } = {}) {
   const l = ctx.loteria();
-  const fonte = $('#retroFonte').value;
+  fonte = fonte ?? $('#retroFonte').value;
+  idTexto = idTexto ?? '#retroTexto';
+  idErros = idErros ?? '#retroErrosTexto';
+  idLote = idLote ?? '#retroLote';
 
   if (fonte === 'texto') {
-    const { jogos, erros } = lerJogosDeTexto($('#retroTexto').value, l);
-    $('#retroErrosTexto').innerHTML = erros.length
+    const { jogos, erros } = lerJogosDeTexto($(idTexto).value, l);
+    $(idErros).innerHTML = erros.length
       ? `<span style="color:var(--alerta)">${erros.join('<br>')}</span>`
       : '';
     return jogos;
   }
 
-  $('#retroErrosTexto').innerHTML = '';
+  $(idErros).innerHTML = '';
 
   if (fonte === 'lote') {
-    const alvo = $('#retroLote').value;
+    const alvo = $(idLote).value;
     const lotes = await lotesDisponiveis();
     return lotes.find((lo) => lo.grupo === alvo)?.jogos ?? [];
   }
 
   const bilhetes = await DB.listarBilhetes(ctx.loteriaId());
   return bilhetes.map((b) => b.dezenas);
+}
+
+/** Os jogos do lado B, ou [] quando não há duelo. */
+async function obterJogosB() {
+  const contra = $('#retroContra').value;
+  if (contra === 'nada') return [];
+  return obterJogos({
+    fonte: contra,
+    idTexto: '#retroTextoB',
+    idErros: '#retroErrosTextoB',
+    idLote: '#retroLoteB',
+  });
+}
+
+/** Preenche a lista de lotes do lado B e mostra o campo certo. */
+/** Nome curto da fonte, para as colunas da tabela do duelo. */
+function rotuloDaFonte(fonte, idLote) {
+  if (fonte === 'todos') return 'Todos os meus bilhetes';
+  if (fonte === 'texto') return 'Jogos colados';
+  if (fonte === 'lote') {
+    const sel = $(idLote);
+    const t = sel?.selectedOptions?.[0]?.textContent ?? '';
+    return t.split(' · ')[0] || 'Lote';
+  }
+  return 'Estratégia';
+}
+
+async function atualizarContra() {
+  const contra = $('#retroContra').value;
+  $('#campoRetroLoteB').hidden = contra !== 'lote';
+  $('#campoRetroTextoB').hidden = contra !== 'texto';
+
+  if (contra === 'lote') {
+    const lotes = await lotesDisponiveis();
+    $('#retroLoteB').innerHTML = lotes.length
+      ? lotes.map((lo) => {
+          const quando = lo.criadoEm ? new Date(lo.criadoEm).toLocaleDateString('pt-BR') : '';
+          return `<option value="${lo.grupo}">${lo.jogos.length} jogo(s) — ${lo.rotulo}${quando ? ` · ${quando}` : ''}</option>`;
+        }).join('')
+      : '<option value="">nenhum lote salvo</option>';
+  }
 }
 
 async function atualizarResumoFonte() {
@@ -292,8 +340,96 @@ function renderFinanceiro(r, l) {
     </div>`;
 }
 
+/**
+ * Duas estratégias reais, lado a lado, sobre os mesmos concursos.
+ *
+ * O cuidado central é o custo: um fechamento de 33 bilhetes e um lote de 10
+ * jogos não custam o mesmo, então comparar "quantas vezes premiou" entre
+ * eles favorece automaticamente quem gasta mais. Por isso toda linha
+ * sensível a volume aparece TAMBÉM por R$ 100 gastos — é a única forma de a
+ * comparação responder à pergunta que o usuário realmente tem, que é onde
+ * vale mais a pena pôr o próximo real.
+ */
+function renderDuelo(a, bB, l, rotulos) {
+  if (!bB) { $('#caixaRetroDuelo').hidden = true; return; }
+  $('#caixaRetroDuelo').hidden = false;
+
+  const brl = (v) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const por100 = (valor, custo) => (custo > 0 ? (valor / custo) * 100 : 0);
+
+  const linha = (rotulo, va, vb, fmt = (x) => x, maiorEhMelhor = true, nota = '') => {
+    const na = typeof va === 'number' ? va : NaN;
+    const nb = typeof vb === 'number' ? vb : NaN;
+    let ca = '', cb = '';
+    if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) {
+      const aGanha = maiorEhMelhor ? na > nb : na < nb;
+      ca = aGanha ? 'color:var(--acento);font-weight:700' : '';
+      cb = aGanha ? '' : 'color:var(--acento);font-weight:700';
+    }
+    return `<tr>
+      <td>${rotulo}${nota ? `<br><span class="nota">${nota}</span>` : ''}</td>
+      <td style="${ca}">${fmt(va)}</td>
+      <td style="${cb}">${fmt(vb)}</td>
+    </tr>`;
+  };
+
+  const ra = a.r.resumo, rb = bB.r.resumo;
+  const fa = a.r.financeiro, fb = bB.r.financeiro;
+  const num = (x) => (typeof x === 'number' ? x.toLocaleString('pt-BR', { maximumFractionDigits: 2 }) : x);
+  const pct = (x) => `${x.toFixed(1)}%`;
+
+  const incompleto = fa.faltamValores.length || fb.faltamValores.length;
+
+  $('#retroDuelo').innerHTML = `
+    <p class="nota">Os mesmos <b>${ra.concursos.toLocaleString('pt-BR')}</b> concursos,
+      as duas estratégias. Verde marca quem se saiu melhor em cada linha.</p>
+
+    <div class="rolagem">
+    <table class="tabela duelo">
+      <thead><tr>
+        <th>&nbsp;</th>
+        <th>${rotulos.a}</th>
+        <th>${rotulos.b}</th>
+      </tr></thead>
+      <tbody>
+        ${linha('Bilhetes por concurso', ra.bilhetes, rb.bilhetes, num, false,
+                'menos bilhetes para o mesmo resultado é melhor')}
+        ${linha('Custo por concurso', fa.custoPorConcurso, fb.custoPorConcurso, brl, false)}
+        ${linha('Custo no período', fa.custoTotal, fb.custoTotal, brl, false)}
+        <tr class="separador"><td colspan="3"></td></tr>
+        ${linha('Concursos que premiaram algo', ra.pctPremiados, rb.pctPremiados, pct)}
+        ${linha('Melhor acerto médio', ra.mediaMelhor, rb.mediaMelhor, (x) => x.toFixed(2))}
+        ${linha('Melhor acerto de todos', ra.melhorDeTodos, rb.melhorDeTodos, num)}
+        ${linha('Maior seca', ra.maiorSeca, rb.maiorSeca, num, false,
+                'concursos seguidos sem prêmio nenhum')}
+        <tr class="separador"><td colspan="3"></td></tr>
+        ${linha('Retorno garantido', fa.retornoFixo, fb.retornoFixo, brl)}
+        ${linha('Retorno por R$ 100 gastos',
+                por100(fa.retornoFixo, fa.custoTotal),
+                por100(fb.retornoFixo, fb.custoTotal),
+                (x) => brl(x), true,
+                'só faixas de valor fixo — é a linha que compara de igual para igual')}
+        ${linha('Saldo sobre o investido', fa.roi, fb.roi, pct)}
+      </tbody>
+    </table>
+    </div>
+
+    ${incompleto ? `<p class="nota" style="color:var(--alerta)">
+      Faixas de rateio sem valor informado ficaram de fora do retorno das duas.
+      Preencha em "Valores de prêmio" para a comparação financeira ficar completa.</p>` : ''}
+
+    <p class="nota">Isto mede o passado, não prevê o futuro. Uma estratégia que
+      teria rendido mais nos últimos anos não tem, por isso, chance maior no
+      próximo concurso — sorteios são independentes. O que a tabela responde é
+      outra coisa, e útil: <b>com o dinheiro que você já gastou, qual dos dois
+      jeitos teria devolvido mais.</b></p>`;
+}
+
 function renderComparacao(r, base, l) {
   if (!base) {
+    /* Só esconde a SUA caixa. O duelo entre estratégias é independente
+       desta comparação com aleatórios — esconder os dois aqui fazia
+       desmarcar "comparar com aleatórios" apagar o duelo junto. */
     $('#caixaRetroComparacao').hidden = true;
     return;
   }
@@ -422,10 +558,29 @@ async function executarVarredura() {
       });
     }
 
+    /* Lado B: a outra estratégia, sobre EXATAMENTE os mesmos concursos.
+       Rodar em períodos diferentes seria comparar coisa nenhuma. */
+    let duelo = null;
+    const jogosB = await obterJogosB();
+    if (jogosB.length) {
+      btn.textContent = 'Varrendo a outra estratégia…';
+      await ctx.esperarPintura();
+      const custoB = jogosB.reduce(
+        (acc, j) => acc + custoAposta(l, j.length, ctx.precoDe(l)).custo, 0
+      );
+      duelo = {
+        r: varrer(jogosB, concursos, l, { premios, custoPorConcurso: custoB, topN: 5 }),
+      };
+    }
+
     ultimoResultado = { r, l };
     renderResumo(r, l);
     renderDistribuicao(r);
     renderFaixas(r, l);
+    renderDuelo({ r }, duelo, l, {
+      a: rotuloDaFonte($('#retroFonte').value, '#retroLote'),
+      b: rotuloDaFonte($('#retroContra').value, '#retroLoteB'),
+    });
     renderComparacao(r, base, l);
     renderMelhores(r, l, jogos);
     renderFinanceiro(r, l);
@@ -468,6 +623,7 @@ export function iniciarRetrospectiva(contexto) {
   ctx = contexto;
 
   $('#retroFonte').addEventListener('change', atualizarFonte);
+  $('#retroContra').addEventListener('change', atualizarContra);
   $('#retroLote').addEventListener('change', atualizarResumoFonte);
   $('#retroPeriodo').addEventListener('change', atualizarResumoFonte);
   $('#retroTexto').addEventListener('input', atualizarResumoFonte);
@@ -500,6 +656,7 @@ export async function atualizarRetrospectiva(trocouLoteria = false) {
   ultimoResultado = null;
   $('#retroResultado').hidden = true;
   $('#caixaRetroComparacao').hidden = true;
+  $('#caixaRetroDuelo').hidden = true;
 
   if (trocouLoteria) {
     $('#retroFonte').value = 'todos';

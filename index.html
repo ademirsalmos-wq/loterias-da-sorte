@@ -27,8 +27,89 @@
     </div>
   </div>
 
-  <div class="seletor-loteria" id="seletorLoteria"></div>
+  <div class="topo-direita">
+    <div class="seletor-loteria" id="seletorLoteria"></div>
+
+    <!-- Estado da conta. Deslogado mostra "Entrar"; logado mostra a inicial. -->
+    <div class="conta-topo">
+      <button class="btn-entrar" id="btnAbrirLogin" type="button">Entrar</button>
+      <button class="chip-conta" id="chipConta" type="button" hidden aria-haspopup="dialog">
+        <span class="avatar-mini" id="avatarTopo"></span>
+        <span class="email-topo" id="emailTopo"></span>
+        <span class="ponto-sync" id="pontoSync" aria-hidden="true"></span>
+      </button>
+    </div>
+  </div>
 </header>
+
+<!-- =========================== LOGIN =========================== -->
+<div class="fundo-modal" id="modalLogin" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tituloLogin">
+    <button class="fechar-modal" id="btnFecharLogin" type="button" aria-label="Fechar">✕</button>
+
+    <div class="cabecalho-modal">
+      <span class="trevo">🍀</span>
+      <div>
+        <h2 id="tituloLogin">Sua conta</h2>
+        <p class="nota">Uma conta liga os bilhetes do computador aos do celular.
+          Sem ela o sistema funciona igual — só não sai deste aparelho.</p>
+      </div>
+    </div>
+
+    <div id="nuvemSemChaves" hidden>
+      <div class="aviso-config">
+        <h3>Falta configurar o Firebase</h3>
+        <p>Abra <code>js/configuracao.js</code> e preencha <code>apiKey</code> e
+          <code>projectId</code>. O passo a passo está em
+          <code>firebase/COMO-CONFIGURAR.md</code>.</p>
+      </div>
+    </div>
+
+    <div id="loginNuvem" hidden>
+      <div class="abas-login" role="tablist">
+        <button class="aba-login ativa" data-modo="entrar" type="button" role="tab">Entrar</button>
+        <button class="aba-login" data-modo="criar" type="button" role="tab">Criar conta</button>
+      </div>
+
+      <form id="formConta" autocomplete="on" novalidate>
+        <div class="campo">
+          <label for="nuvemEmail">E-mail</label>
+          <input type="email" id="nuvemEmail" name="email" autocomplete="username"
+                 inputmode="email" autocapitalize="none" spellcheck="false"
+                 placeholder="voce@exemplo.com">
+        </div>
+
+        <div class="campo">
+          <label for="nuvemSenha">Senha</label>
+          <div class="campo-senha">
+            <input type="password" id="nuvemSenha" name="password"
+                   autocomplete="current-password" placeholder="sua senha">
+            <button type="button" class="olho" id="verSenha"
+                    aria-label="Mostrar a senha" title="Mostrar a senha">ver</button>
+          </div>
+          <div class="forca-senha" id="forcaSenha" hidden>
+            <div class="barra"><span></span></div>
+            <span class="rotulo"></span>
+          </div>
+          <span class="nota" id="dicaSenha">Use a mesma conta nos dois aparelhos —
+            é ela que liga os bilhetes de um ao outro.</span>
+          <span class="aviso-caps" id="avisoCaps" hidden>Caps Lock está ligado.</span>
+        </div>
+
+        <p class="recado-login" id="recadoLogin" hidden></p>
+
+        <button class="btn primario largo" id="btnConta" type="submit">Entrar</button>
+
+        <div class="rodape-login">
+          <button class="link-botao" id="btnEsqueciSenha" type="button">Esqueci minha senha</button>
+          <button class="link-botao" id="btnTrocarModo" type="button">Não tenho conta ainda</button>
+        </div>
+      </form>
+
+      <p class="nota rodape-modal" id="avisoLocal"></p>
+    </div>
+  </div>
+</div>
 
 <nav class="abas" id="abas">
   <button class="aba ativa" data-alvo="painel">Painel</button>
@@ -286,38 +367,41 @@
     <div class="caixa">
       <h2>Dezenas do fechamento</h2>
       <div id="volanteFechamento" class="volante"></div>
-      <div class="acoes-volante">
+      <div class="acoes-volante" id="acoesFechamento">
         <button class="btn fantasma" id="limparFechamento">Limpar</button>
         <button class="btn fantasma" id="aleatorioFechamento">Sortear grupo</button>
         <span class="nota" id="resumoFechamento"></span>
       </div>
+      <p class="nota" id="semFechamentoVolante" hidden></p>
     </div>
 
     <div class="caixa">
       <h2>Parâmetros</h2>
 
-      <div class="campo">
-        <label>Dezenas por bilhete</label>
-        <select id="fechPorJogo"></select>
-      </div>
+      <div id="parametrosFechamento">
+        <div class="campo">
+          <label>Dezenas por bilhete</label>
+          <select id="fechPorJogo"></select>
+        </div>
 
-      <div class="campo">
-        <label>Cenário assumido</label>
-        <select id="fechCenario"></select>
-        <span class="nota">"T das sorteadas caem dentro do meu grupo".
-          Quanto menor o T, mais barato — e mais realista.</span>
-      </div>
+        <div class="campo">
+          <label>Cenário assumido</label>
+          <select id="fechCenario"></select>
+          <span class="nota">"T das sorteadas caem dentro do meu grupo".
+            Quanto menor o T, mais barato — e mais realista.</span>
+        </div>
 
-      <div class="campo">
-        <label>Pontos garantidos</label>
-        <select id="fechGarantia"></select>
+        <div class="campo">
+          <label>Pontos garantidos</label>
+          <select id="fechGarantia"></select>
+        </div>
       </div>
 
       <div id="previaFechamento" class="previa"></div>
 
       <button class="btn primario" id="btnFechar">Montar fechamento</button>
-      <p class="nota">Fechamentos grandes podem levar alguns segundos —
-        a verificação testa todos os cenários.</p>
+      <p class="nota" id="notaFechamentoLento">Fechamentos grandes podem levar alguns
+        segundos — a verificação testa todos os cenários.</p>
     </div>
   </div>
 
@@ -385,6 +469,30 @@
         </select>
       </div>
 
+      <div class="campo">
+        <label>Comparar com</label>
+        <select id="retroContra">
+          <option value="nada">— nada, só varrer estes jogos —</option>
+          <option value="lote">Outro lote meu</option>
+          <option value="texto">Outros jogos colados abaixo</option>
+        </select>
+        <span class="nota">Duas estratégias sobre os MESMOS concursos. Como os
+          lotes podem custar diferente, a tabela mostra também o resultado por
+          R$ 100 gastos — é esse número que permite comparar de verdade.</span>
+      </div>
+
+      <div class="campo" id="campoRetroLoteB" hidden>
+        <label>Lote para comparar</label>
+        <select id="retroLoteB"></select>
+      </div>
+
+      <div class="campo" id="campoRetroTextoB" hidden>
+        <label>Um jogo por linha</label>
+        <textarea id="retroTextoB" rows="6"
+          placeholder="Cole aqui os jogos da outra estratégia"></textarea>
+        <span class="nota" id="retroErrosTextoB"></span>
+      </div>
+
       <label class="check">
         <input type="checkbox" id="retroComparar" checked>
         Comparar com jogos aleatórios de mesmo custo
@@ -424,6 +532,11 @@
         <h2>Desempenho por faixa</h2>
         <div id="retroFaixas"></div>
       </div>
+    </div>
+
+    <div class="caixa" id="caixaRetroDuelo" hidden>
+      <h2>Uma estratégia contra a outra</h2>
+      <div id="retroDuelo"></div>
     </div>
 
     <div class="caixa" id="caixaRetroComparacao" hidden>
@@ -518,64 +631,13 @@
       O histórico de concursos <b>não</b> sobe — cada aparelho busca da Caixa
       em segundos, e ocupar banco com dado público não faria sentido.</p>
 
-    <!-- Falta preencher js/configuracao.js -->
-    <div id="nuvemSemChaves" hidden>
-      <div class="aviso-config">
-        <h3>Falta configurar o Firebase</h3>
-        <p>Abra <code>js/configuracao.js</code> e preencha <code>apiKey</code> e
-          <code>projectId</code>. O passo a passo completo está em
-          <code>firebase/COMO-CONFIGURAR.md</code>.</p>
-        <p class="nota">Essas duas chaves podem ficar visíveis no repositório —
-          quem protege os dados são as regras de segurança do Firestore.</p>
-      </div>
+    <div id="nuvemDeslogado" hidden>
+      <p class="nota">Você não está conectado. Os bilhetes deste aparelho estão
+        gravados só aqui — ao entrar numa conta, eles sobem e passam a
+        acompanhar você nos outros aparelhos.</p>
+      <button class="btn primario" id="btnEntrarConfig" type="button">Entrar ou criar conta</button>
     </div>
 
-    <!-- Cartão de login -->
-    <div id="loginNuvem" hidden>
-      <div class="cartao-login">
-        <div class="abas-login" role="tablist">
-          <button class="aba-login ativa" data-modo="entrar" type="button" role="tab">Entrar</button>
-          <button class="aba-login" data-modo="criar" type="button" role="tab">Criar conta</button>
-        </div>
-
-        <form id="formConta" autocomplete="on" novalidate>
-          <div class="campo">
-            <label for="nuvemEmail">E-mail</label>
-            <input type="email" id="nuvemEmail" name="email" autocomplete="username"
-                   inputmode="email" autocapitalize="none" spellcheck="false"
-                   placeholder="voce@exemplo.com">
-          </div>
-
-          <div class="campo">
-            <label for="nuvemSenha">Senha</label>
-            <div class="campo-senha">
-              <input type="password" id="nuvemSenha" name="password"
-                     autocomplete="current-password" placeholder="sua senha">
-              <button type="button" class="olho" id="verSenha"
-                      aria-label="Mostrar a senha" title="Mostrar a senha">ver</button>
-            </div>
-            <div class="forca-senha" id="forcaSenha" hidden>
-              <div class="barra"><span></span></div>
-              <span class="rotulo"></span>
-            </div>
-            <span class="nota" id="dicaSenha">Use a mesma conta nos dois aparelhos —
-              é ela que liga os bilhetes de um ao outro.</span>
-            <span class="aviso-caps" id="avisoCaps" hidden>Caps Lock está ligado.</span>
-          </div>
-
-          <p class="recado-login" id="recadoLogin" hidden></p>
-
-          <button class="btn primario largo" id="btnConta" type="submit">Entrar</button>
-
-          <div class="rodape-login">
-            <button class="link-botao" id="btnEsqueciSenha" type="button">Esqueci minha senha</button>
-            <button class="link-botao" id="btnTrocarModo" type="button">Não tenho conta ainda</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <!-- Conectado -->
     <div id="nuvemConectado" hidden>
       <div class="cartao-conta">
         <div class="avatar" id="avatarConta" aria-hidden="true"></div>

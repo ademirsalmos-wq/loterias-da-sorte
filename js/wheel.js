@@ -122,6 +122,20 @@ export function umEmQuantos(p) {
 }
 
 export function validarPedido({ n, j, t, g }) {
+  /* Piso, e não só teto.
+     Faltava isto, e o buraco era feio: quando o volante encolhia, o
+     `<select>` da tela ficava com um valor que não existia mais entre as
+     opções, o navegador punha `value = ''`, e `Number('')` é ZERO — não
+     NaN, então nenhuma guarda pegava. Com j=0 e g=0 o motor devolvia
+     `jogos: [[]]` e `garantiaAtendida: true`: a tela anunciava
+     "✓ Garantia verificada" ao lado de um bilhete SEM NENHUMA DEZENA, que
+     dava para salvar na carteira e subia para a nuvem.
+     Zero é um valor plausível demais para confiar em quem chama. */
+  if (!Number.isInteger(j) || j < 1) return 'Escolha quantas dezenas cada bilhete terá.';
+  if (!Number.isInteger(t) || t < 1) return 'Escolha em quantos acertos dentro do grupo o fechamento deve apostar.';
+  if (!Number.isInteger(g) || g < 1) return 'Escolha a garantia mínima do fechamento.';
+  if (!Number.isInteger(n) || n < 1) return 'Escolha as dezenas do fechamento no volante.';
+
   if (j > n) return `Cada bilhete tem ${j} dezenas, mas você só escolheu ${n}.`;
   if (t > n) return `Você espera ${t} acertos dentro de ${n} dezenas — impossível.`;
   if (g > Math.min(j, t)) {

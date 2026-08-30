@@ -154,6 +154,7 @@ icones/             ícones do PWA
 firebase/
   firestore.rules   regras de segurança — publique no console antes de usar
   COMO-CONFIGURAR.md  passo a passo do console do Firebase
+testes/             suíte automatizada — `node testes/rodar.mjs`
 supabase/
   schema.sql        histórico: o banco anterior, mantido só como registro
 ```

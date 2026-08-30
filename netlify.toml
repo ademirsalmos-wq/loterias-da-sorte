@@ -56,3 +56,15 @@
   for = "/icones/*"
   [headers.values]
     Cache-Control = "public, max-age=604800"
+
+# ---------------------------------------------------------------------
+# Os testes vão para o repositório (é onde eles servem para alguma coisa)
+# mas não precisam ser servidos como site. Estes cabeçalhos evitam que
+# mecanismos de busca os indexem; o Netlify publica a pasta inteira e não
+# há como excluí-los da publicação sem um passo de build, que este projeto
+# não tem — e não vale criar um só por isso.
+# ---------------------------------------------------------------------
+[[headers]]
+  for = "/testes/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"

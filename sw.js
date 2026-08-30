@@ -24,7 +24,7 @@
  */
 
 /** Mude ao publicar: é o que dispara a limpeza do cache antigo. */
-const VERSAO = 'v13-2026-08-30';
+const VERSAO = 'v19-2026-08-30';
 const CACHE = `loterias-${VERSAO}`;
 
 /** O esqueleto do app. Se um destes faltar, a tela não abre. */
