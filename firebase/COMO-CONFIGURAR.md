@@ -45,8 +45,15 @@ isso passa a ser um passo extra a implementar, não uma chave a desligar.
 - Quando perguntar as regras iniciais, pode escolher **modo bloqueado** —
   o passo 4 substitui tudo mesmo.
 
-O banco precisa existir antes de qualquer chamada. Se você pular este
-passo, o app avisa que não achou o banco.
+**Este passo é fácil de achar que já está feito e não estar.** Se o banco
+nunca foi criado, a API do Firestore responde **403**, e não 404 — o mesmo
+código que ela usa quando as regras recusam. Ou seja: "banco inexistente" e
+"regras bloqueando" são indistinguíveis de fora, e é comum concluir a
+segunda quando o caso é a primeira.
+
+O jeito de saber é olhar a tela: se ela mostra o botão **Criar banco de
+dados**, o banco não existe. Se mostra as abas **Dados · Regras · Índices**,
+existe.
 
 ## 4. Publicar as regras de segurança
 

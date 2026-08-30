@@ -63,13 +63,33 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 /* ------------------------------------------------------------------ */
 
 let timerToast;
+/**
+ * As mensagens de erro da nuvem trazem `<b>` e `<code>` porque nascem para
+ * o recado do login, que é renderizado como HTML. No toast, que usa
+ * `textContent` por segurança, elas apareciam com as tags à mostra —
+ * "Publique as regras de <code>firebase/firestore.rules</code>".
+ *
+ * A saída é tirar as tags aqui, e não passar a renderizar HTML no toast:
+ * parte dessas mensagens carrega texto vindo da API do Firebase, e isso
+ * não deve virar marcação.
+ */
+const semTags = (s) => String(s)
+  .replace(/<[^>]+>/g, '')
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+  .replace(/\s+/g, ' ')
+  .trim();
+
 function toast(msg, erro = false) {
   const el = $('#toast');
-  el.textContent = msg;
+  const texto = semTags(msg);
+  el.textContent = texto;
   el.classList.toggle('erro', erro);
   el.classList.add('visivel');
   clearTimeout(timerToast);
-  timerToast = setTimeout(() => el.classList.remove('visivel'), 3600);
+  /* Um recado de três linhas não se lê em 3,6 s. O tempo acompanha o
+     tamanho, com teto para não ficar preso na tela. */
+  const tempo = Math.min(12000, Math.max(3600, texto.length * 65));
+  timerToast = setTimeout(() => el.classList.remove('visivel'), tempo);
 }
 
 /**
@@ -1667,6 +1687,15 @@ $('#nuvemSenha').addEventListener('input', (ev) => {
   el.dataset.nivel = String(f.nivel);
   el.querySelector('.rotulo').textContent = f.rotulo;
 });
+
+/* Erro é sobre o que foi enviado, não sobre o que está sendo digitado.
+   Sem isto, a tela se contradiz: a barra de força diz "ótima" enquanto o
+   recado logo abaixo ainda acusa "precisa de pelo menos 8 caracteres",
+   porque a mensagem é do envio anterior. Some ao primeiro toque. */
+['#nuvemEmail', '#nuvemSenha'].forEach((sel) =>
+  $(sel).addEventListener('input', () => {
+    if (!$('#recadoLogin').hidden) limparRecado();
+  }));
 
 /* Caps Lock ligado é a causa silenciosa nº 1 de "minha senha não funciona". */
 ['keyup', 'keydown'].forEach((evt) =>

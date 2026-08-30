@@ -340,12 +340,18 @@ async function chamarFirestore(url, opcoes = {}) {
     const corpo = await r.json().catch(() => ({}));
     const st = corpo?.error?.status;
 
-    /* 403 é regra de segurança recusando; 401 é token inválido. Nunca
-       ramificar pelo texto da mensagem, que não é documentado. */
+    /* 403 tem DUAS causas que a resposta não distingue: as regras
+       recusaram, ou o banco nunca foi criado (a API responde 403, não
+       404, quando o Firestore ainda não foi ativado no projeto).
+       Afirmar só a primeira manda o usuário procurar uma aba de Regras
+       que nem existe ainda — foi o que aconteceu de verdade aqui.
+       Nunca ramificar pelo texto da mensagem, que não é documentado. */
     if (r.status === 403 || st === 'PERMISSION_DENIED') {
       throw new Error(
-        'O Firestore recusou o acesso. Publique as regras de ' +
-        '<code>firebase/firestore.rules</code> em Firestore Database → Regras.'
+        'O Firestore recusou o acesso. Duas causas possíveis, nesta ordem: ' +
+        '<b>(1)</b> o banco ainda não foi criado — no console, Firestore Database → ' +
+        '<b>Criar banco de dados</b>, modo Nativo; ou <b>(2)</b> ele existe mas as ' +
+        'regras de <code>firebase/firestore.rules</code> não foram publicadas na aba Regras.'
       );
     }
     if (r.status === 401) throw new Error('Sua sessão expirou. Entre de novo.');
