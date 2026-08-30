@@ -69,7 +69,7 @@ estatístico, sem filtro, com dezenas quentes, com dezenas frias: 1 em
 
 6. **Instalável no aparelho (PWA) e sincronizado entre eles.**
    Vira ícone na tela inicial, abre sem barra de navegador e funciona sem
-   internet com os dados já baixados. Ligando o Supabase, o bilhete salvo no
+   internet com os dados já baixados. Entrando com uma conta, o bilhete salvo no
    PC aparece no celular e vice-versa.
 
 7. **Contabilidade honesta.**
@@ -135,7 +135,8 @@ css/style.css       folha única
 js/
   config.js         definição das loterias e tabela de prêmios
                     (adicionar uma modalidade nova = uma entrada aqui)
-  db.js             persistência — IndexedDB, com adaptador Supabase pronto
+  db.js             persistência — IndexedDB, ids em UUID e lápides de exclusão
+  configuracao.js   as chaves do Firebase (preencha antes de publicar)
   api.js            importação dos resultados oficiais
   stats.js          motor estatístico
   generator.js      gerador com filtros + pontuação de popularidade
@@ -145,13 +146,16 @@ js/
   tickets.js        custos, conferência e balanço
   app.js            interface
   retro-ui.js       a aba Retrospectiva (separada para não inchar o app.js)
-  nuvem.js          sincronização entre aparelhos (Supabase via REST, sem SDK)
+  nuvem.js          contas e sincronização (Firebase via REST, sem SDK)
   pwa.js            instalação e controle de versão do app
 sw.js               service worker (cache do app, nunca dos resultados)
 manifest.webmanifest
 icones/             ícones do PWA
+firebase/
+  firestore.rules   regras de segurança — publique no console antes de usar
+  COMO-CONFIGURAR.md  passo a passo do console do Firebase
 supabase/
-  schema.sql        só é necessário se você ligar a sincronização em nuvem
+  schema.sql        histórico: o banco anterior, mantido só como registro
 ```
 
 ---
@@ -230,22 +234,30 @@ nenhuma configuração. Os dados nunca saem da máquina.
 Três stores: `historico` (um registro por loteria, com todos os concursos num
 blob só — muito mais rápido que 3.500 registros soltos), `bilhetes` e `config`.
 
-### Ligar o Supabase (opcional)
+### Ligar a sincronização entre aparelhos
 
-O limite do plano free é de **2 projetos ativos por organização**, não por
-conta. Se os seus dois já estão ocupados, crie uma **nova organização free** —
-não custa nada e libera o terceiro projeto.
+O passo a passo completo está em **`firebase/COMO-CONFIGURAR.md`**. Em resumo:
 
-1. Rode `supabase/schema.sql` no SQL Editor do projeto.
-2. Preencha `SUPABASE_CONFIG` em `js/db.js`.
-3. Troque a última linha do arquivo:
-   ```js
-   export const DB = SupabaseAdapter;
-   ```
+1. Crie um projeto no [console do Firebase](https://console.firebase.google.com).
+2. **Authentication** → ligue o provedor **E-mail/senha**.
+3. **Firestore Database** → crie o banco em modo Nativo.
+4. Publique as regras de **`firebase/firestore.rules`**. Este passo não é
+   opcional: a chave que vai no código é pública por desenho, e são as regras
+   que impedem outra pessoa de ler seus bilhetes.
+5. Preencha `apiKey` e `projectId` em **`js/configuracao.js`**.
 
-O histórico de concursos continua em IndexedDB mesmo com o Supabase ligado: são
-dados públicos, pesados e idênticos para todo mundo — não faz sentido ocupar
-banco (e cota de transferência) com eles.
+Depois é só criar a conta no PC e entrar com a mesma conta no celular.
+
+**Por que Firebase e não Supabase.** O projeto nasceu no Supabase e migrou. O
+plano free do Supabase dá 2 projetos ativos por organização, e o limite conta
+os projetos de todos os Owners — criar uma organização nova não libera um
+terceiro para quem trabalha sozinho. Além disso, projeto free do Supabase é
+pausado após 7 dias de baixa atividade. O Firebase não documenta limite de
+projetos no plano Spark e não pausa por inatividade.
+
+O histórico de concursos continua só em IndexedDB: são dados públicos, pesados
+e idênticos para todo mundo — não faz sentido ocupar banco (e cota de leitura)
+com eles. Para a nuvem vai só o que é seu e é pequeno: os bilhetes.
 
 ---
 
@@ -372,28 +384,24 @@ sozinho no meio de um fechamento.
 ## Sincronizar entre aparelhos
 
 Local-first: o **IndexedDB continua sendo a base de trabalho**, instantâneo e
-offline. O Supabase é um espelho que sincroniza por cima quando dá. Falar
+offline. O Firebase é um espelho que sincroniza por cima quando dá. Falar
 direto com o banco faria o app depender de internet para abrir uma tela.
 
 ### Como ligar
 
-1. **Você provavelmente não precisa de um projeto novo.** O limite do plano
-   free é de 500 MB de banco, não de tabelas, e estes bilhetes ocupam alguns
-   kilobytes. Use um projeto que já existe. A tabela se chama
-   `loterias_bilhetes`, com prefixo justamente para conviver sem colidir com
-   as tabelas da aplicação que já mora ali.
+O passo a passo com telas está em **`firebase/COMO-CONFIGURAR.md`**. Resumo:
 
-   (A documentação do Supabase diz apenas "limit of 2 active projects", sem
-   esclarecer se é por conta ou por organização — então não conte com a ideia
-   de criar uma organização nova para ganhar mais um. Se algum projeto estiver
-   parado, pausá-lo também libera uma vaga: o limite é de projetos ATIVOS.)
-2. Rode `supabase/schema.sql` no SQL Editor.
-3. Em **Project Settings → API**, copie a *Project URL* e a *anon public key*.
-4. No app: **Configurações → Sincronizar entre aparelhos → Configurar o
-   Supabase**, cole os dois e salve.
-5. Informe seu e-mail e clique em receber o link. Abra o e-mail **no mesmo
-   aparelho** e clique — você volta ao app já conectado.
-6. Repita o passo 5 no outro aparelho, com o mesmo e-mail.
+1. Crie um projeto no console do Firebase (sem limite documentado no plano
+   gratuito, e sem pausa por inatividade).
+2. **Authentication** → ligue **E-mail/senha**.
+3. **Firestore Database** → crie o banco em modo **Nativo**.
+4. Publique **`firebase/firestore.rules`** em Firestore → Regras.
+5. Copie `apiKey` e `projectId` para **`js/configuracao.js`**.
+6. No app: **Configurações → Sua conta → Criar conta**. No outro aparelho,
+   **Entrar** com o mesmo e-mail e a mesma senha.
+
+Nenhum e-mail é enviado nesse caminho — o e-mail só entra em cena se você
+esquecer a senha.
 
 Login por link, sem senha: nada para criar, nada para guardar, nada para vazar.
 

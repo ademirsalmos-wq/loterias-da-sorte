@@ -512,90 +512,101 @@
   </div>
 
   <div class="caixa">
-    <h2>Sincronizar entre aparelhos</h2>
-    <p class="nota">Seus bilhetes ficam gravados no navegador de cada aparelho.
-      Ligando a nuvem, o que você salva no PC aparece no celular e vice-versa.
+    <h2>Sua conta</h2>
+    <p class="nota">Os bilhetes ficam gravados no navegador de cada aparelho.
+      Com uma conta, o que você salva no PC aparece no celular e vice-versa.
       O histórico de concursos <b>não</b> sobe — cada aparelho busca da Caixa
       em segundos, e ocupar banco com dado público não faria sentido.</p>
 
-    <div id="estadoNuvem"></div>
-
-    <details class="filtros" id="detalhesNuvem">
-      <summary>Configurar o Supabase</summary>
-      <p class="nota"><b>Não precisa de projeto novo.</b> A tabela se chama
-        <code>loterias_bilhetes</code>, com prefixo justamente para conviver com
-        outra aplicação: rode o <code>supabase/schema.sql</code> no SQL Editor de
-        um projeto que você já usa. O limite do plano free é de 500 MB de banco,
-        não de tabelas, e estes bilhetes ocupam alguns kilobytes.</p>
-      <p class="nota">Depois cole abaixo os dados de
-        <b>Project Settings → API</b>. A chave certa é a <b>anon public</b> —
-        nunca a <code>service_role</code>, que dá acesso total ao banco.</p>
-      <p class="nota">E em <b>Authentication → URL Configuration</b>, ponha o
-        endereço deste site em <b>Site URL</b> e em <b>Redirect URLs</b>. Sem
-        isso o link do e-mail não traz você de volta para cá.</p>
-      <div class="campo">
-        <label>Project URL</label>
-        <input type="text" id="nuvemUrl" placeholder="https://xxxx.supabase.co">
+    <!-- Falta preencher js/configuracao.js -->
+    <div id="nuvemSemChaves" hidden>
+      <div class="aviso-config">
+        <h3>Falta configurar o Firebase</h3>
+        <p>Abra <code>js/configuracao.js</code> e preencha <code>apiKey</code> e
+          <code>projectId</code>. O passo a passo completo está em
+          <code>firebase/COMO-CONFIGURAR.md</code>.</p>
+        <p class="nota">Essas duas chaves podem ficar visíveis no repositório —
+          quem protege os dados são as regras de segurança do Firestore.</p>
       </div>
-      <div class="campo">
-        <label>Chave anônima (anon public)</label>
-        <input type="text" id="nuvemChave" placeholder="eyJhbGci…">
-        <span class="nota">Esta chave é feita para ficar visível no navegador —
-          quem protege os dados são as políticas de RLS do schema.</span>
-      </div>
-      <button class="btn" id="btnSalvarNuvem">Salvar</button>
-    </details>
+    </div>
 
+    <!-- Cartão de login -->
     <div id="loginNuvem" hidden>
-      <div class="abas-login">
-        <button class="aba-login ativa" data-modo="entrar" type="button">Entrar</button>
-        <button class="aba-login" data-modo="criar" type="button">Criar conta</button>
+      <div class="cartao-login">
+        <div class="abas-login" role="tablist">
+          <button class="aba-login ativa" data-modo="entrar" type="button" role="tab">Entrar</button>
+          <button class="aba-login" data-modo="criar" type="button" role="tab">Criar conta</button>
+        </div>
+
+        <form id="formConta" autocomplete="on" novalidate>
+          <div class="campo">
+            <label for="nuvemEmail">E-mail</label>
+            <input type="email" id="nuvemEmail" name="email" autocomplete="username"
+                   inputmode="email" autocapitalize="none" spellcheck="false"
+                   placeholder="voce@exemplo.com">
+          </div>
+
+          <div class="campo">
+            <label for="nuvemSenha">Senha</label>
+            <div class="campo-senha">
+              <input type="password" id="nuvemSenha" name="password"
+                     autocomplete="current-password" placeholder="sua senha">
+              <button type="button" class="olho" id="verSenha"
+                      aria-label="Mostrar a senha" title="Mostrar a senha">ver</button>
+            </div>
+            <div class="forca-senha" id="forcaSenha" hidden>
+              <div class="barra"><span></span></div>
+              <span class="rotulo"></span>
+            </div>
+            <span class="nota" id="dicaSenha">Use a mesma conta nos dois aparelhos —
+              é ela que liga os bilhetes de um ao outro.</span>
+            <span class="aviso-caps" id="avisoCaps" hidden>Caps Lock está ligado.</span>
+          </div>
+
+          <p class="recado-login" id="recadoLogin" hidden></p>
+
+          <button class="btn primario largo" id="btnConta" type="submit">Entrar</button>
+
+          <div class="rodape-login">
+            <button class="link-botao" id="btnEsqueciSenha" type="button">Esqueci minha senha</button>
+            <button class="link-botao" id="btnTrocarModo" type="button">Não tenho conta ainda</button>
+          </div>
+        </form>
       </div>
+    </div>
 
-      <form id="formConta" autocomplete="on">
-        <div class="campo">
-          <label for="nuvemEmail">E-mail</label>
-          <input type="email" id="nuvemEmail" name="email"
-                 autocomplete="username" placeholder="voce@exemplo.com">
+    <!-- Conectado -->
+    <div id="nuvemConectado" hidden>
+      <div class="cartao-conta">
+        <div class="avatar" id="avatarConta" aria-hidden="true"></div>
+        <div class="dados-conta">
+          <b id="emailConta"></b>
+          <span class="nota" id="ultimaSync"></span>
         </div>
-        <div class="campo">
-          <label for="nuvemSenha">Senha</label>
-          <input type="password" id="nuvemSenha" name="password"
-                 autocomplete="current-password" placeholder="sua senha">
-          <span class="nota" id="dicaSenha">Use a mesma conta nos dois aparelhos —
-            é ela que liga os bilhetes de um ao outro.</span>
-        </div>
-        <div class="botoes">
-          <button class="btn primario" id="btnConta" type="submit">Entrar</button>
-          <button class="btn fantasma" id="btnEsqueciSenha" type="button">Esqueci a senha</button>
-        </div>
-      </form>
-
-      <details class="filtros" id="detalhesLink">
-        <summary>Entrar sem senha, por link de e-mail</summary>
-        <p class="nota">Serve para entrar num aparelho sem digitar a senha. O
-          Supabase envia <b>no máximo 2 e-mails por hora</b> no serviço embutido,
-          então nos dois aparelhos seguidos ele costuma recusar — por isso a
-          senha é o caminho principal.</p>
-        <button class="btn" id="btnEnviarLink" type="button">Receber link de acesso</button>
-      </details>
+        <span class="selo-ok" id="seloSync">sincronizado</span>
+      </div>
+      <div class="botoes" id="acoesNuvem">
+        <button class="btn primario" id="btnSincronizarNuvem">Sincronizar agora</button>
+        <button class="btn fantasma" id="btnMudarSenha">Mudar a senha</button>
+        <button class="btn fantasma" id="btnSairNuvem">Sair desta conta</button>
+      </div>
     </div>
 
     <div id="trocaSenha" hidden>
-      <p class="nota"><b>Escolha a senha nova.</b> Você entrou por um link de
-        redefinição — a troca só vale depois de confirmar aqui.</p>
       <div class="campo">
         <label for="senhaNova">Senha nova</label>
-        <input type="password" id="senhaNova" autocomplete="new-password">
+        <div class="campo-senha">
+          <input type="password" id="senhaNova" autocomplete="new-password">
+          <button type="button" class="olho" id="verSenhaNova"
+                  aria-label="Mostrar a senha">ver</button>
+        </div>
       </div>
-      <button class="btn primario" id="btnTrocarSenha" type="button">Salvar senha nova</button>
+      <div class="botoes">
+        <button class="btn primario" id="btnTrocarSenha" type="button">Salvar senha nova</button>
+        <button class="btn fantasma" id="btnCancelarSenha" type="button">Cancelar</button>
+      </div>
     </div>
 
-    <div class="botoes" id="acoesNuvem" hidden>
-      <button class="btn primario" id="btnSincronizarNuvem">Sincronizar agora</button>
-      <button class="btn fantasma" id="btnMudarSenha">Mudar a senha</button>
-      <button class="btn fantasma" id="btnSairNuvem">Sair desta conta</button>
-    </div>
     <p class="nota" id="statusNuvem"></p>
   </div>
 
@@ -611,9 +622,9 @@
   <div class="caixa">
     <h2>Seus dados</h2>
     <p class="nota">Tudo fica gravado no navegador deste aparelho (IndexedDB).
-      Se você ligou a sincronização acima, os <b>bilhetes</b> também ficam no seu
-      projeto Supabase — mais nada sai daqui. O backup abaixo é local e sempre vale
-      a pena, principalmente antes de limpar dados do navegador.</p>
+      Se você entrou com uma conta, os <b>bilhetes</b> também ficam no seu projeto
+      do Firebase — mais nada sai daqui. O backup abaixo é local e sempre vale a
+      pena, principalmente antes de limpar dados do navegador.</p>
     <div class="botoes">
       <button class="btn" id="btnBackup">Baixar backup</button>
       <label class="btn fantasma arquivo">

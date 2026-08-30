@@ -1,0 +1,70 @@
+// ===================================================================
+// Loterias da Sorte — regras de segurança do Firestore.
+//
+// COLE ISTO no console do Firebase: Firestore Database → aba Regras →
+// substitua tudo → Publicar.
+//
+// Isto NÃO é opcional. A `apiKey` que fica em js/configuracao.js é
+// pública por desenho — é isto aqui que impede qualquer pessoa de ler
+// ou escrever os seus dados. Sem publicar estas regras, ou o banco
+// recusa tudo (modo bloqueado) ou aceita tudo (modo de teste), e as
+// duas coisas estão erradas.
+// ===================================================================
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------
+    // Cada usuário só enxerga o que está debaixo do próprio uid.
+    //
+    // A dona do dado está no CAMINHO (`usuarios/{uid}/...`), não num
+    // campo dentro do documento. Essa escolha não é estética:
+    //
+    //   1. a regra não precisa abrir o documento para saber de quem
+    //      ele é, o que a torna impossível de burlar com um campo
+    //      forjado no corpo da requisição;
+    //   2. listar a coleção inteira continua permitido. Uma regra do
+    //      tipo `resource.data.userId == request.auth.uid` obrigaria
+    //      o Firestore a checar documento por documento e recusaria a
+    //      listagem — que é exatamente o que a sincronização faz.
+    //
+    // `{document=**}` cobre o documento do usuário e tudo abaixo dele,
+    // incluindo `bilhetes` e qualquer subcoleção futura. Regras não
+    // descem para subcoleções sozinhas: sem o curinga, uma regra em
+    // `/usuarios/{uid}` deixaria `/usuarios/{uid}/bilhetes` de fora.
+    // -------------------------------------------------------------
+    match /usuarios/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // -------------------------------------------------------------
+    // Tudo o mais é negado.
+    //
+    // Negar já é o padrão do Firestore, então esta regra é redundante
+    // de propósito: ela deixa a intenção escrita, e evita que alguém
+    // (inclusive eu, daqui a seis meses) suponha que existe uma porta
+    // aberta em algum canto do banco.
+    // -------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+
+// ===================================================================
+// Como conferir que ficou certo
+//
+// No console: Firestore Database → Regras → aba "Playground".
+//
+//  1) Simule uma LEITURA em
+//        /usuarios/SEU_UID/bilhetes/qualquer
+//     autenticado com esse mesmo uid → deve PERMITIR.
+//
+//  2) Repita com um uid DIFERENTE no caminho → deve NEGAR.
+//
+//  3) Simule sem autenticação → deve NEGAR.
+//
+// Se o passo 2 permitir, pare tudo: seus dados estão abertos.
+// ===================================================================

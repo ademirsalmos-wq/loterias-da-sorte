@@ -1,78 +1,154 @@
 /**
- * nuvem.js — Sincronização entre aparelhos, via Supabase.
+ * nuvem.js — Contas e sincronização entre aparelhos, via Firebase.
  *
  * =====================================================================
- * POR QUE SEM SDK
+ * POR QUE FIREBASE, E POR QUE SEM SDK
  *
- * O supabase-js resolveria isto em menos linhas, mas custaria: um import
- * de CDN externo (mais uma coisa que pode sair do ar ou mudar sem aviso —
- * já aprendemos essa), ~40 KB no celular, e uma dependência num projeto
- * que até aqui não tem nenhuma.
+ * Antes era Supabase. A troca não foi por gosto: o plano free do
+ * Supabase permite 2 projetos ativos POR ORGANIZAÇÃO, e o limite conta
+ * os projetos de todos os Owners — então criar uma organização nova não
+ * libera um terceiro projeto para quem trabalha sozinho. O sistema
+ * acabava morando numa base emprestada de outro app. Some a isso que
+ * projeto free do Supabase é pausado após 7 dias de baixa atividade.
  *
- * O que usamos do Supabase são duas APIs REST simples: `/auth/v1` para o
- * login por link de e-mail e `/rest/v1` (PostgREST) para ler e gravar. Dá
- * para falar com as duas usando `fetch`, e é o que este arquivo faz.
+ * O Firebase não documenta limite de projetos no plano Spark e não
+ * pausa por inatividade.
+ *
+ * O SDK do Firebase resolveria isto em menos linhas, mas custaria uns
+ * 100 KB no celular e uma dependência de CDN num projeto que até aqui
+ * não tem nenhuma — e a lição do espelho JSON morto foi justamente essa.
+ * O que usamos são duas APIs REST simples: `identitytoolkit` para as
+ * contas e `firestore.googleapis.com` para os dados. `fetch` dá conta.
  *
  * COMO O CONFLITO SE RESOLVE
  *
  * Cada bilhete tem `atualizadoEm`. Ao sincronizar, para cada registro
- * vence a versão com a data mais recente — em qualquer direção. É a regra
- * mais simples que funciona, e funciona bem aqui porque um bilhete quase
- * nunca é editado nos dois aparelhos ao mesmo tempo: o caso real é criar
- * no PC e conferir no celular, ou vice-versa.
+ * vence a versão com a data mais recente — em qualquer direção. É a
+ * regra mais simples que funciona, e funciona bem aqui porque um
+ * bilhete quase nunca é editado nos dois aparelhos ao mesmo tempo: o
+ * caso real é criar no PC e conferir no celular, ou vice-versa.
  *
  * O QUE NÃO SOBE PARA A NUVEM
  *
  * O histórico de concursos. São ~10 mil registros públicos, iguais para
- * todo mundo, que cada aparelho busca da Caixa em segundos. Subir isso só
- * gastaria cota de banco e de transferência sem benefício nenhum.
+ * todo mundo, que cada aparelho busca da Caixa em segundos. Subir isso
+ * só gastaria cota de leitura e escrita sem benefício nenhum.
  * =====================================================================
  */
 
 import { DB } from './db.js';
+import { FIREBASE, COLECAO_USUARIOS, COLECAO_BILHETES, nuvemConfigurada } from './configuracao.js';
 
-const CHAVE_CONFIG = 'nuvem:config';
 const CHAVE_SESSAO = 'nuvem:sessao';
 const CHAVE_ULTIMA_SYNC = 'nuvem:ultimaSync';
 
-/* ------------------------------------------------------------------ */
-/* Configuração                                                        */
-/* ------------------------------------------------------------------ */
+const AUTH = 'https://identitytoolkit.googleapis.com/v1/accounts';
+/* A renovação do token mora em OUTRO host, e é o único endpoint de
+   autenticação que não fala JSON. Ver `renovarToken()`. */
+const TOKEN = 'https://securetoken.googleapis.com/v1/token';
+const FIRESTORE = 'https://firestore.googleapis.com/v1';
 
-export async function lerConfig() {
-  return (await DB.getConfig(CHAVE_CONFIG, null)) ?? { url: '', anonKey: '' };
-}
+export { nuvemConfigurada };
 
-export async function salvarConfig({ url, anonKey }) {
-  const limpo = {
-    url: (url ?? '').trim().replace(/\/+$/, ''),
-    anonKey: (anonKey ?? '').trim(),
-  };
-  await DB.setConfig(CHAVE_CONFIG, limpo);
-  return limpo;
-}
-
+/** Herdado da versão Supabase; a tela ainda pergunta isto. */
 export async function estaConfigurada() {
-  const c = await lerConfig();
-  return Boolean(c.url && c.anonKey);
+  return nuvemConfigurada();
+}
+
+/* ------------------------------------------------------------------ */
+/* Erros: inglês cru vira português com o que fazer a respeito          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * O Firebase devolve o código em `error.message`, às vezes com um
+ * detalhe colado depois de " : " — daí o uso de `startsWith` e não `===`.
+ */
+function erroDeAuth(codigo) {
+  const c = String(codigo || '');
+  const eh = (p) => c.startsWith(p);
+
+  if (eh('EMAIL_EXISTS')) {
+    return 'Já existe conta com este e-mail. Use <b>Entrar</b> — e se esqueceu a senha, peça a redefinição.';
+  }
+  /* Projetos criados a partir de set/2023 têm proteção contra
+     enumeração de e-mails ligada: senha errada e e-mail inexistente
+     voltam com o MESMO código, de propósito. Não dá para distinguir, e
+     a mensagem não deve fingir que dá. */
+  if (eh('INVALID_LOGIN_CREDENTIALS') || eh('INVALID_PASSWORD') || eh('EMAIL_NOT_FOUND')) {
+    return 'E-mail ou senha não conferem. Se é a primeira vez neste aparelho, use <b>Criar conta</b>.';
+  }
+  if (eh('WEAK_PASSWORD')) {
+    return 'Senha fraca demais para o Firebase — ele exige pelo menos 6 caracteres.';
+  }
+  if (eh('INVALID_EMAIL')) return 'Esse e-mail não parece válido.';
+  if (eh('MISSING_PASSWORD')) return 'Informe a senha.';
+  if (eh('USER_DISABLED')) return 'Esta conta foi desativada no console do Firebase.';
+  if (eh('TOO_MANY_ATTEMPTS_TRY_LATER')) {
+    return 'O Firebase bloqueou temporariamente as tentativas deste aparelho. Espere alguns minutos.';
+  }
+  if (eh('OPERATION_NOT_ALLOWED')) {
+    return 'O login por e-mail e senha está desligado neste projeto. Ligue em ' +
+           'Authentication → Sign-in method → E-mail/senha.';
+  }
+  if (eh('USER_NOT_FOUND')) return 'Não achei uma conta com este e-mail.';
+  if (eh('INVALID_ID_TOKEN') || eh('TOKEN_EXPIRED')) {
+    return 'Sua sessão expirou. Entre de novo.';
+  }
+  if (eh('API_KEY_INVALID') || eh('API key not valid')) {
+    return 'A <code>apiKey</code> em <code>js/configuracao.js</code> não é válida para este projeto.';
+  }
+  if (eh('CONFIGURATION_NOT_FOUND')) {
+    return 'O projeto existe, mas a autenticação por e-mail e senha nunca foi ligada. ' +
+           'Vá em Authentication → Get started → E-mail/senha → Ativar.';
+  }
+  return c ? `Firebase: ${c}` : 'O Firebase recusou a chamada, sem dizer o motivo.';
+}
+
+async function chamarAuth(metodo, corpo) {
+  if (!nuvemConfigurada()) {
+    throw new Error('Falta preencher a apiKey e o projectId em <code>js/configuracao.js</code>.');
+  }
+  let r;
+  try {
+    r = await fetch(`${AUTH}:${metodo}?key=${encodeURIComponent(FIREBASE.apiKey)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(corpo),
+    });
+  } catch {
+    throw new Error('Não consegui falar com o Firebase. Verifique sua conexão.');
+  }
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(erroDeAuth(d?.error?.message));
+  return d;
 }
 
 /* ------------------------------------------------------------------ */
 /* Sessão                                                              */
 /* ------------------------------------------------------------------ */
 
-async function lerSessao() {
-  return DB.getConfig(CHAVE_SESSAO, null);
-}
+const lerSessao = () => DB.getConfig(CHAVE_SESSAO, null);
 
 async function salvarSessao(s) {
   await DB.setConfig(CHAVE_SESSAO, s);
+  return s;
+}
+
+/** Guarda o que o Firebase devolve depois de um login bem-sucedido. */
+function daResposta(d) {
+  return {
+    idToken: d.idToken,
+    refreshToken: d.refreshToken,
+    uid: d.localId,
+    email: d.email ?? null,
+    expiraEm: Date.now() + Number(d.expiresIn ?? 3600) * 1000,
+  };
 }
 
 export async function sessaoAtual() {
   const s = await lerSessao();
-  if (!s?.access_token) return null;
-  return { email: s.email ?? null, expiraEm: s.expira_em ?? null };
+  if (!s?.idToken) return null;
+  return { email: s.email ?? null, uid: s.uid ?? null, expiraEm: s.expiraEm ?? null };
 }
 
 export async function sair() {
@@ -80,319 +156,252 @@ export async function sair() {
   await DB.setConfig(CHAVE_ULTIMA_SYNC, null);
 }
 
-/** Renova o token quando falta menos de um minuto para expirar. */
-async function tokenValido() {
-  const cfg = await lerConfig();
-  const s = await lerSessao();
-  if (!s?.access_token) throw new Error('Você não está conectado à nuvem.');
-
-  const faltando = (s.expira_em ?? 0) - Date.now();
-  if (faltando > 60000) return s.access_token;
-
-  if (!s.refresh_token) throw new Error('Sessão expirada. Entre de novo.');
-
-  const r = await fetch(`${cfg.url}/auth/v1/token?grant_type=refresh_token`, {
+/**
+ * Renova o token quando falta menos de um minuto para expirar.
+ *
+ * Este endpoint é a exceção de toda a API: mora em `securetoken`, fala
+ * `x-www-form-urlencoded` em vez de JSON, e devolve os campos em
+ * snake_case (`id_token`) em vez de camelCase (`idToken`). Errar isso
+ * dá um 400 silencioso que parece "sessão expirada" sem ser.
+ *
+ * Sobre não mandar o `content-type` na mão: passar um `URLSearchParams`
+ * como corpo faz o navegador pôr o cabeçalho certo sozinho, e evita um
+ * preflight de CORS que pode ser recusado.
+ */
+async function renovarToken(s) {
+  const r = await fetch(`${TOKEN}?key=${encodeURIComponent(FIREBASE.apiKey)}`, {
     method: 'POST',
-    headers: { apikey: cfg.anonKey, 'content-type': 'application/json' },
-    body: JSON.stringify({ refresh_token: s.refresh_token }),
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: s.refreshToken }),
   });
-
+  const d = await r.json().catch(() => ({}));
   if (!r.ok) {
     await DB.setConfig(CHAVE_SESSAO, null);
-    throw new Error('Sessão expirada. Entre de novo com seu e-mail.');
+    throw new Error('Sua sessão expirou. Entre de novo.');
   }
+  return salvarSessao({
+    idToken: d.id_token,
+    refreshToken: d.refresh_token,
+    uid: d.user_id ?? s.uid,
+    email: s.email,
+    expiraEm: Date.now() + Number(d.expires_in ?? 3600) * 1000,
+  });
+}
 
-  const d = await r.json();
-  const nova = {
-    access_token: d.access_token,
-    refresh_token: d.refresh_token,
-    email: d.user?.email ?? s.email,
-    expira_em: Date.now() + (d.expires_in ?? 3600) * 1000,
-  };
-  await salvarSessao(nova);
-  return nova.access_token;
+/** Devolve uma sessão com token válido, renovando se preciso. */
+async function sessaoValida() {
+  const s = await lerSessao();
+  if (!s?.idToken) throw new Error('Você não está conectado.');
+  if ((s.expiraEm ?? 0) - Date.now() > 60000) return s;
+  if (!s.refreshToken) {
+    await DB.setConfig(CHAVE_SESSAO, null);
+    throw new Error('Sua sessão expirou. Entre de novo.');
+  }
+  return renovarToken(s);
 }
 
 /* ------------------------------------------------------------------ */
-/* Conta: e-mail e senha                                               */
-/*                                                                     */
-/* O login nasceu por link de e-mail, sem senha. Caiu por um motivo    */
-/* prático: o SMTP embutido do Supabase manda DUAS mensagens por hora, */
-/* e ligar o segundo aparelho gasta as duas. Além disso, uma conta de  */
-/* verdade é o alicerce de qualquer cobrança futura — assinatura se    */
-/* prende a um usuário, não a um link que expira.                      */
-/*                                                                     */
-/* O link mágico continua aqui, como caminho alternativo, e o e-mail   */
-/* passa a ser só recuperação de senha.                                */
+/* Conta                                                               */
 /* ------------------------------------------------------------------ */
 
-/** Mensagem de erro do Supabase, traduzida e com o que fazer a respeito. */
-function erroDeAuth(status, cru, destino) {
-  if (status === 429 || /rate limit/i.test(cru)) {
-    return 'O Supabase só envia 2 e-mails por hora no serviço embutido, e esse limite ' +
-      'acabou de estourar. Espere uma hora — ou configure um SMTP próprio em ' +
-      'Authentication → Emails, que sobe para 30 por hora.';
-  }
-  if (/invalid login credentials/i.test(cru)) {
-    return 'E-mail ou senha não conferem. Se esta é a primeira vez neste aparelho, ' +
-      'use "Criar conta" em vez de "Entrar".';
-  }
-  if (/user already registered|already been registered/i.test(cru)) {
-    return 'Já existe conta com este e-mail. Use "Entrar" — e se esqueceu a senha, ' +
-      'peça a redefinição.';
-  }
-  if (/email not confirmed/i.test(cru)) {
-    return 'A conta existe mas o e-mail ainda não foi confirmado. Confirme pelo link ' +
-      'que o Supabase enviou, ou desligue a confirmação em ' +
-      'Authentication → Providers → Email (opção "Confirm email").';
-  }
-  if (/password.*(short|least|6|characters)/i.test(cru)) {
-    return 'Senha curta demais para o que o projeto exige.';
-  }
-  if (/redirect|not allowed/i.test(cru)) {
-    return `O Supabase recusou o endereço de retorno (${destino}). Vá em ` +
-      'Authentication → URL Configuration e ponha esse endereço em Site URL e em Redirect URLs.';
-  }
-  if (/signups? not allowed|disabled/i.test(cru)) {
-    return 'Este projeto está com novos cadastros desligados. Ligue em ' +
-      'Authentication → Providers → Email.';
-  }
-  return cru ? `Supabase: ${cru}` : `Supabase respondeu ${status}.`;
-}
-
-async function postAuth(caminho, corpo) {
-  const cfg = await lerConfig();
-  if (!cfg.url || !cfg.anonKey) throw new Error('Configure a URL e a chave do Supabase primeiro.');
-
-  const destino = location.origin + location.pathname;
-  const r = await fetch(`${cfg.url}/auth/v1/${caminho}`, {
-    method: 'POST',
-    headers: { apikey: cfg.anonKey, 'content-type': 'application/json' },
-    body: JSON.stringify(corpo),
-  });
-
-  const dados = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    throw new Error(erroDeAuth(r.status, dados.msg || dados.error_description || dados.error || '', destino));
-  }
-  return dados;
-}
-
-/** Guarda o que o Supabase devolve depois de um login bem-sucedido. */
-async function guardarRetornoDeLogin(d) {
-  if (!d.access_token) return null;
-  await salvarSessao({
-    access_token: d.access_token,
-    refresh_token: d.refresh_token ?? null,
-    email: d.user?.email ?? null,
-    expira_em: Date.now() + (d.expires_in ?? 3600) * 1000,
-  });
-  return { email: d.user?.email ?? null };
-}
-
-/**
- * Cria a conta. Se o projeto exigir confirmação por e-mail, o Supabase
- * responde SEM tokens — daí o retorno distinguir os dois casos, para a tela
- * poder dizer a verdade em vez de fingir que já entrou.
- */
 export async function criarConta(email, senha) {
-  const d = await postAuth('signup', {
-    email,
-    password: senha,
-    options: { emailRedirectTo: location.origin + location.pathname },
-  });
-  const sessao = await guardarRetornoDeLogin(d);
-  return sessao
-    ? { entrou: true, email: sessao.email }
-    : { entrou: false, email, precisaConfirmar: true };
+  const d = await chamarAuth('signUp', { email, password: senha, returnSecureToken: true });
+  const s = await salvarSessao(daResposta(d));
+  return { entrou: true, email: s.email };
 }
 
-/** Entra numa conta existente. */
 export async function entrarComSenha(email, senha) {
-  const d = await postAuth('token?grant_type=password', { email, password: senha });
-  const s = await guardarRetornoDeLogin(d);
-  if (!s) throw new Error('O Supabase não devolveu a sessão.');
-  return s;
+  const d = await chamarAuth('signInWithPassword', { email, password: senha, returnSecureToken: true });
+  const s = await salvarSessao(daResposta(d));
+  return { email: s.email };
 }
 
-/** Dispara o e-mail de redefinição de senha (sujeito ao teto de 2 por hora). */
 export async function pedirRedefinicaoDeSenha(email) {
-  await postAuth('recover', { email, redirect_to: location.origin + location.pathname });
+  await chamarAuth('sendOobCode', { requestType: 'PASSWORD_RESET', email });
   return { email };
 }
 
 /**
- * Troca a senha da sessão aberta. Serve tanto para mudar por vontade própria
- * quanto para concluir a redefinição, já que o link de recuperação abre o app
- * com uma sessão válida.
+ * Troca a senha da sessão aberta.
+ *
+ * Trocar a senha INVALIDA os tokens antigos e o Firebase devolve um par
+ * novo. Sem regravar a sessão aqui, a próxima sincronização levaria um
+ * 401 e o usuário seria expulso logo depois de mudar a senha.
  */
 export async function trocarSenha(nova) {
-  const cfg = await lerConfig();
-  const token = await tokenValido();
-  const r = await fetch(`${cfg.url}/auth/v1/user`, {
-    method: 'PUT',
-    headers: {
-      apikey: cfg.anonKey,
-      authorization: `Bearer ${token}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({ password: nova }),
-  });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(erroDeAuth(r.status, d.msg || d.error_description || '', ''));
-  return { email: d.email ?? null };
-}
-
-/* ------------------------------------------------------------------ */
-/* Login por link de e-mail (caminho alternativo)                      */
-/* ------------------------------------------------------------------ */
-
-/**
- * Manda o link mágico. Continua útil para entrar num aparelho sem digitar
- * senha, mas esbarra no teto de 2 e-mails por hora do SMTP embutido.
- */
-export async function enviarLink(email) {
-  const cfg = await lerConfig();
-  if (!cfg.url || !cfg.anonKey) throw new Error('Configure a URL e a chave do Supabase primeiro.');
-
-  const destino = location.origin + location.pathname;
-  const r = await fetch(`${cfg.url}/auth/v1/otp`, {
-    method: 'POST',
-    headers: { apikey: cfg.anonKey, 'content-type': 'application/json' },
-    body: JSON.stringify({ email, create_user: true, redirect_to: destino }),
-  });
-
-  if (!r.ok) {
-    const erro = await r.json().catch(() => ({}));
-    throw new Error(
-      erroDeAuth(r.status, erro.msg || erro.error_description || erro.error || '', destino)
-    );
-  }
-  return { destino };
-}
-
-/**
- * O Supabase devolve os tokens no fragmento da URL (#access_token=...).
- * Chamado na abertura do app; se achar, guarda e limpa a barra de endereço
- * para o token não ficar exposto no histórico do navegador.
- */
-export async function capturarRetornoDoLink() {
-  if (!location.hash.includes('access_token')) return null;
-
-  const p = new URLSearchParams(location.hash.slice(1));
-  const access_token = p.get('access_token');
-  if (!access_token) return null;
-
-  let email = null;
-  try {
-    // O e-mail vem dentro do próprio JWT; evita mais uma ida ao servidor.
-    email = JSON.parse(atob(access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))?.email ?? null;
-  } catch { /* token opaco: seguimos sem o e-mail */ }
-
+  const s = await sessaoValida();
+  const d = await chamarAuth('update', { idToken: s.idToken, password: nova, returnSecureToken: true });
   await salvarSessao({
-    access_token,
-    refresh_token: p.get('refresh_token'),
-    email,
-    expira_em: Date.now() + Number(p.get('expires_in') ?? 3600) * 1000,
+    idToken: d.idToken ?? s.idToken,
+    refreshToken: d.refreshToken ?? s.refreshToken,
+    uid: d.localId ?? s.uid,
+    email: d.email ?? s.email,
+    expiraEm: Date.now() + Number(d.expiresIn ?? 3600) * 1000,
   });
-
-  history.replaceState(null, '', location.pathname + location.search);
-
-  /* `type=recovery` é o link de "esqueci a senha": ele abre o app com sessão
-     válida, mas o usuário ainda precisa escolher a senha nova. Sem devolver
-     isso, a tela diria só "conectado" e a redefinição ficaria pela metade. */
-  return { email, tipo: p.get('type') ?? null };
+  return { email: d.email ?? s.email };
 }
 
 /* ------------------------------------------------------------------ */
-/* Conversão entre o formato local e o do banco                        */
+/* Firestore: conversão entre o formato local e o do banco             */
+/*                                                                     */
+/* O Firestore não guarda JSON solto: cada campo é um objeto que diz o  */
+/* próprio tipo. Inteiro vai como STRING (`{integerValue:"15"}`) — é    */
+/* assim mesmo, para caber int64 sem perder precisão em JavaScript.     */
 /* ------------------------------------------------------------------ */
 
-const paraBanco = (b, userId) => ({
-  id: b.id,
-  user_id: userId,
-  loteria: b.loteria,
-  dezenas: b.dezenas,
-  concurso: b.concurso ?? null,
-  origem: b.origem ?? null,
-  grupo: b.grupo ?? null,
-  rotulo: b.rotulo ?? null,
-  custo: b.custo ?? 0,
-  conferido: Boolean(b.conferido),
-  acertos: b.acertos ?? null,
-  premiado: Boolean(b.premiado),
-  premio: b.premio ?? 0,
-  removido: Boolean(b.removido),
-  criado_em: b.criadoEm ?? null,
-  atualizado_em: b.atualizadoEm,
-});
+const txt = (v) => ({ stringValue: String(v) });
+const num = (v) => ({ integerValue: String(Math.trunc(v)) });
+const bool = (v) => ({ booleanValue: Boolean(v) });
+const nulo = { nullValue: null };
+const dec = (v) => ({ doubleValue: Number(v) });
 
-const paraLocal = (r) => ({
-  id: r.id,
-  loteria: r.loteria,
-  dezenas: r.dezenas ?? [],
-  concurso: r.concurso,
-  origem: r.origem ?? '',
-  grupo: r.grupo ?? null,
-  rotulo: r.rotulo ?? '',
-  custo: Number(r.custo ?? 0),
-  conferido: Boolean(r.conferido),
-  acertos: r.acertos,
-  premiado: Boolean(r.premiado),
-  premio: Number(r.premio ?? 0),
-  removido: Boolean(r.removido),
-  criadoEm: r.criado_em ?? null,
-  atualizadoEm: r.atualizado_em,
-});
+const talvezNum = (v) => (v == null ? nulo : num(v));
 
-/* ------------------------------------------------------------------ */
-/* Sincronização                                                       */
-/* ------------------------------------------------------------------ */
-
-function idDoUsuario(token) {
-  try {
-    return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))?.sub ?? null;
-  } catch {
-    return null;
-  }
+function valorParaJs(v) {
+  if (!v || typeof v !== 'object') return null;
+  if ('nullValue' in v) return null;
+  if ('stringValue' in v) return v.stringValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('booleanValue' in v) return v.booleanValue;
+  if ('timestampValue' in v) return v.timestampValue;
+  if ('arrayValue' in v) return (v.arrayValue.values ?? []).map(valorParaJs);
+  return null;
 }
 
 /**
- * Nome da tabela, com prefixo.
+ * `atualizadoEm` vai como STRING, não como timestamp do Firestore.
  *
- * Um projeto Supabase comporta várias aplicações — o limite do plano free é
- * de 500 MB de banco, não de tabelas. Como este sistema pode acabar dividindo
- * projeto com outro app (o ScoutStrike, por exemplo, que também é de
- * apostas), uma tabela chamada só `bilhetes` seria pedir colisão.
+ * É deliberado. A resolução de conflito compara essa data texto a texto,
+ * e o Firestore normaliza timestamps na volta (mexe em casas decimais e
+ * no sufixo). Guardar como string devolve exatamente o que foi gravado,
+ * e a comparação continua idêntica à da versão anterior. Nada aqui
+ * consulta o banco por data, então não se perde nada em troca.
  */
-export const TABELA = 'loterias_bilhetes';
+const paraBanco = (b) => ({
+  fields: {
+    loteria: txt(b.loteria),
+    dezenas: { arrayValue: { values: (b.dezenas ?? []).map(num) } },
+    concurso: talvezNum(b.concurso),
+    origem: b.origem ? txt(b.origem) : nulo,
+    grupo: b.grupo ? txt(b.grupo) : nulo,
+    rotulo: b.rotulo ? txt(b.rotulo) : nulo,
+    custo: dec(b.custo ?? 0),
+    conferido: bool(b.conferido),
+    acertos: talvezNum(b.acertos),
+    premiado: bool(b.premiado),
+    premio: dec(b.premio ?? 0),
+    removido: bool(b.removido),
+    criadoEm: b.criadoEm ? txt(b.criadoEm) : nulo,
+    atualizadoEm: txt(b.atualizadoEm),
+  },
+});
 
-async function chamarRest(caminho, opcoes = {}) {
-  const cfg = await lerConfig();
-  const token = await tokenValido();
+function paraLocal(doc) {
+  const f = doc.fields ?? {};
+  const v = (k) => valorParaJs(f[k]);
+  return {
+    id: doc.name.split('/').pop(),
+    loteria: v('loteria'),
+    dezenas: (v('dezenas') ?? []).map(Number),
+    concurso: v('concurso'),
+    origem: v('origem') ?? '',
+    grupo: v('grupo'),
+    rotulo: v('rotulo') ?? '',
+    custo: Number(v('custo') ?? 0),
+    conferido: Boolean(v('conferido')),
+    acertos: v('acertos'),
+    premiado: Boolean(v('premiado')),
+    premio: Number(v('premio') ?? 0),
+    removido: Boolean(v('removido')),
+    criadoEm: v('criadoEm'),
+    atualizadoEm: v('atualizadoEm'),
+  };
+}
 
-  const r = await fetch(`${cfg.url}/rest/v1/${caminho}`, {
+/* ------------------------------------------------------------------ */
+/* Firestore: chamadas                                                 */
+/* ------------------------------------------------------------------ */
+
+const raiz = () => `projects/${FIREBASE.projectId}/databases/(default)/documents`;
+const caminhoDosBilhetes = (uid) => `${raiz()}/${COLECAO_USUARIOS}/${uid}/${COLECAO_BILHETES}`;
+
+async function chamarFirestore(url, opcoes = {}) {
+  const s = await sessaoValida();
+  const r = await fetch(url, {
     ...opcoes,
     headers: {
-      apikey: cfg.anonKey,
-      authorization: `Bearer ${token}`,
+      authorization: `Bearer ${s.idToken}`,
       'content-type': 'application/json',
       ...(opcoes.headers ?? {}),
     },
   });
 
   if (!r.ok) {
-    const corpo = await r.text().catch(() => '');
-    if (r.status === 404 || /relation .* does not exist/i.test(corpo)) {
+    const corpo = await r.json().catch(() => ({}));
+    const st = corpo?.error?.status;
+
+    /* 403 é regra de segurança recusando; 401 é token inválido. Nunca
+       ramificar pelo texto da mensagem, que não é documentado. */
+    if (r.status === 403 || st === 'PERMISSION_DENIED') {
       throw new Error(
-        `A tabela "${TABELA}" não existe neste projeto. Rode o supabase/schema.sql no SQL Editor.`
+        'O Firestore recusou o acesso. Publique as regras de ' +
+        '<code>firebase/firestore.rules</code> em Firestore Database → Regras.'
       );
     }
-    throw new Error(`Supabase respondeu ${r.status}. ${corpo.slice(0, 160)}`);
+    if (r.status === 401) throw new Error('Sua sessão expirou. Entre de novo.');
+    if (r.status === 404 || st === 'NOT_FOUND') {
+      throw new Error(
+        'Não achei o banco neste projeto. No console do Firebase, ' +
+        'crie o Firestore Database (modo Nativo) uma vez.'
+      );
+    }
+    throw new Error(`Firestore respondeu ${r.status}. ${corpo?.error?.message ?? ''}`.trim());
   }
 
   return r.status === 204 ? null : r.json();
 }
+
+/**
+ * Lista TODOS os bilhetes do usuário.
+ *
+ * O Google não publica o padrão nem o teto do `pageSize`, e a própria
+ * documentação avisa que o Firestore "pode devolver menos que esse
+ * valor". Então a única leitura correta é seguir o `nextPageToken` até
+ * ele sumir — nunca deduzir que acabou porque vieram menos documentos
+ * do que o pedido.
+ */
+async function listarRemotos(uid) {
+  const docs = [];
+  let token = '';
+  do {
+    const url = `${FIRESTORE}/${caminhoDosBilhetes(uid)}?pageSize=300` +
+                (token ? `&pageToken=${encodeURIComponent(token)}` : '');
+    const p = await chamarFirestore(url);
+    docs.push(...(p?.documents ?? []));
+    token = p?.nextPageToken ?? '';
+  } while (token);
+  return docs;
+}
+
+/** Grava vários bilhetes de uma vez. */
+async function gravarRemotos(uid, bilhetes) {
+  const LOTE = 200;   // o teto por commit não é documentado; conservador de propósito
+  for (let i = 0; i < bilhetes.length; i += LOTE) {
+    const writes = bilhetes.slice(i, i + LOTE).map((b) => ({
+      /* Sem `updateMask`, o PATCH é substituição completa — que é o que
+         queremos: o bilhete local é a verdade inteira sobre ele. */
+      update: { name: `${caminhoDosBilhetes(uid)}/${b.id}`, ...paraBanco(b) },
+    }));
+    await chamarFirestore(`${FIRESTORE}/projects/${FIREBASE.projectId}/databases/(default)/documents:commit`, {
+      method: 'POST',
+      body: JSON.stringify({ writes }),
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Sincronização                                                       */
+/* ------------------------------------------------------------------ */
 
 /**
  * Uma rodada completa: empurra o que mudou aqui, puxa o que mudou lá, e
@@ -401,33 +410,23 @@ async function chamarRest(caminho, opcoes = {}) {
  * @returns {{enviados, recebidos, aplicados, quando}}
  */
 export async function sincronizar({ completa = false } = {}) {
-  const token = await tokenValido();
-  const userId = idDoUsuario(token);
-  if (!userId) throw new Error('Não consegui identificar o usuário na sessão.');
+  const s = await sessaoValida();
+  const uid = s.uid;
+  if (!uid) throw new Error('Não consegui identificar o usuário na sessão.');
 
-  /* O cursor serve só para o ENVIO — ali comparamos o nosso relógio com as
-     nossas próprias datas, que é uma comparação legítima. */
+  /* O cursor serve só para o ENVIO — ali comparamos o nosso relógio com
+     as nossas próprias datas, que é uma comparação legítima. */
   const desde = completa ? null : await DB.getConfig(CHAVE_ULTIMA_SYNC, null);
   const inicio = new Date().toISOString();
 
   /* ---- empurrar ---- */
   const locais = await DB.listarBilhetes(null, true);
-  const aEnviar = desde
-    ? locais.filter((b) => (b.atualizadoEm ?? '') > desde)
-    : locais;
-
-  if (aEnviar.length) {
-    // resolution=merge-duplicates faz o upsert por chave primária.
-    await chamarRest(`${TABELA}?on_conflict=id`, {
-      method: 'POST',
-      headers: { prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify(aEnviar.map((b) => paraBanco(b, userId))),
-    });
-  }
+  const aEnviar = desde ? locais.filter((b) => (b.atualizadoEm ?? '') > desde) : locais;
+  if (aEnviar.length) await gravarRemotos(uid, aEnviar);
 
   /* ---- puxar: TUDO, sempre ----
-     A tentação aqui é puxar só o que mudou desde a última vez, filtrando por
-     `atualizado_em > desde`. Testado, e está errado — deixa registro para trás:
+     A tentação aqui é puxar só o que mudou desde a última vez. Testado,
+     e está errado — deixa registro para trás:
 
        o celular edita um bilhete às 15h00 (data gravada: 15h00);
        o PC sincroniza às 15h01 (cursor do PC vai para 15h01);
@@ -435,34 +434,29 @@ export async function sincronizar({ completa = false } = {}) {
        o PC sincroniza de novo e pede "o que mudou depois de 15h01" —
        o registro tem 15h00 e fica invisível para sempre.
 
-     O cursor mede o relógio de QUEM sincroniza; a data mede quando o OUTRO
-     editou. Comparar os dois é a origem do buraco.
+     O cursor mede o relógio de QUEM sincroniza; a data mede quando o
+     OUTRO editou. Comparar os dois é a origem do buraco.
 
-     A correção certa seria uma coluna preenchida pelo servidor no momento da
-     gravação. A correção suficiente, para o tamanho deste app, é puxar tudo:
-     algumas centenas de bilhetes são poucos KB, e some uma classe inteira de
-     bug silencioso. Se um dia forem dezenas de milhares, aí sim vale a coluna. */
-  const remotos = await chamarRest(`${TABELA}?select=*`);
+     Puxar tudo custa uma leitura por bilhete. Com centenas de bilhetes
+     e o teto de 50 mil leituras por dia do plano gratuito, sobra folga
+     de duas ordens de grandeza. */
+  const remotos = await listarRemotos(uid);
 
   /* ---- mesclar: vence a data mais recente ---- */
   const porId = new Map(locais.map((b) => [b.id, b]));
   const aplicar = [];
-
-  for (const r of remotos ?? []) {
-    const vindo = paraLocal(r);
+  for (const doc of remotos) {
+    const vindo = paraLocal(doc);
     const aqui = porId.get(vindo.id);
-    if (!aqui || (vindo.atualizadoEm ?? '') > (aqui.atualizadoEm ?? '')) {
-      aplicar.push(vindo);
-    }
+    if (!aqui || (vindo.atualizadoEm ?? '') > (aqui.atualizadoEm ?? '')) aplicar.push(vindo);
   }
-
   if (aplicar.length) await DB.gravarComoEsta(aplicar);
 
   await DB.setConfig(CHAVE_ULTIMA_SYNC, inicio);
 
   return {
     enviados: aEnviar.length,
-    recebidos: (remotos ?? []).length,
+    recebidos: remotos.length,
     aplicados: aplicar.length,
     quando: inicio,
   };
@@ -470,11 +464,31 @@ export async function sincronizar({ completa = false } = {}) {
 
 /** Confere se dá para falar com o banco, sem mexer em nada. */
 export async function testarConexao() {
-  const r = await chamarRest(`${TABELA}?select=id&limit=1`);
-  const s = await lerSessao();
-  return { ok: true, email: s?.email ?? null, registros: Array.isArray(r) ? r.length : 0 };
+  const s = await sessaoValida();
+  const p = await chamarFirestore(`${FIRESTORE}/${caminhoDosBilhetes(s.uid)}?pageSize=1`);
+  return { ok: true, email: s.email ?? null, registros: (p?.documents ?? []).length };
 }
 
 export async function ultimaSincronizacao() {
   return DB.getConfig(CHAVE_ULTIMA_SYNC, null);
+}
+
+/* ------------------------------------------------------------------ */
+/* Compatibilidade com a versão Supabase                               */
+/*                                                                     */
+/* A tela antiga chamava estas funções. Elas somem quando a interface   */
+/* nova estiver publicada, mas enquanto convivem é melhor existir e     */
+/* explicar do que estourar um "not a function" no console.             */
+/* ------------------------------------------------------------------ */
+
+export async function lerConfig() {
+  return { url: FIREBASE.projectId, anonKey: FIREBASE.apiKey };
+}
+
+export async function salvarConfig() {
+  throw new Error('As chaves agora ficam em <code>js/configuracao.js</code>, não nesta tela.');
+}
+
+export async function capturarRetornoDoLink() {
+  return null;   // o Firebase não devolve sessão pela URL neste fluxo
 }

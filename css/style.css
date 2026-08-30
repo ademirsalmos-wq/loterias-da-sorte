@@ -193,7 +193,12 @@ main { padding: 1.25rem; max-width: 1180px; margin: 0 auto; }
 .campo.inline { display: flex; align-items: center; gap: .5rem; margin-bottom: 0; }
 .campo.inline label { margin: 0; }
 
-input[type=text], input[type=number], select, input[type=file] {
+/* Listar tipo por tipo é um convite a esquecer um: `email` e `password`
+   ficaram de fora quando a tela de login nasceu, e vieram brancos, com o
+   estilo padrão do navegador, no meio de um tema escuro. */
+input[type=text], input[type=number], input[type=email], input[type=password],
+input[type=search], input[type=tel], input[type=date],
+select, input[type=file] {
   background: var(--fundo); color: var(--texto);
   border: 1px solid var(--borda); border-radius: 8px;
   padding: .5rem .65rem; font-size: .87rem; font-family: inherit;
@@ -567,24 +572,136 @@ input[type=number].premio-input {
 }
 .faixa-atualizacao .link { color: #06131f; opacity: .75; }
 
-/* =================== login da nuvem =================== */
+/* =================== conta e login =================== */
+
+.aviso-config {
+  border: 1px solid var(--alerta); border-radius: var(--raio);
+  padding: 1rem 1.1rem; background: rgba(255,176,32,.06);
+}
+.aviso-config h3 { margin: 0 0 .5rem; font-size: 1rem; }
+.aviso-config p { margin: .4rem 0; font-size: .88rem; }
+
+/* O cartão é estreito de propósito: um formulário de login que se
+   espalha por 900 px parece um formulário de cadastro. */
+.cartao-login {
+  max-width: 380px; margin: 0 auto;
+  border: 1px solid var(--borda); border-radius: var(--raio);
+  padding: 1.3rem; background: var(--fundo);
+}
 
 .abas-login {
-  display: flex; gap: .3rem; margin-bottom: .9rem;
+  display: flex; gap: .3rem; margin-bottom: 1.1rem;
   border-bottom: 1px solid var(--borda);
 }
 .aba-login {
-  background: none; border: 0; cursor: pointer;
+  flex: 1; background: none; border: 0; cursor: pointer;
   color: var(--texto-3); font: inherit; font-weight: 650;
-  padding: .5rem .9rem; border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
+  padding: .55rem .5rem; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: color .12s, border-color .12s;
 }
 .aba-login:hover { color: var(--texto); }
 .aba-login.ativa { color: var(--loteria); border-bottom-color: var(--loteria); }
 
+/* O botão "ver" fica DENTRO do campo, e o padding à direita do input
+   abre espaço para ele — sem isso a senha passa por baixo do botão. */
+.campo-senha { position: relative; }
+.campo-senha input { width: 100%; padding-right: 3.4rem; }
+.olho {
+  position: absolute; right: .5rem; top: 50%; transform: translateY(-50%);
+  background: none; border: 0; cursor: pointer; padding: .25rem .4rem;
+  color: var(--texto-3); font: inherit; font-size: .78rem; font-weight: 650;
+  text-transform: uppercase; letter-spacing: .04em; border-radius: 6px;
+}
+.olho:hover { color: var(--loteria); background: rgba(255,255,255,.05); }
+
+.forca-senha { display: flex; align-items: center; gap: .6rem; margin-top: .45rem; }
+.forca-senha .barra {
+  flex: 1; height: 4px; border-radius: 3px; background: var(--borda); overflow: hidden;
+}
+.forca-senha .barra span {
+  display: block; height: 100%; width: 0; border-radius: 3px;
+  transition: width .2s, background .2s;
+}
+.forca-senha .rotulo {
+  font-size: .72rem; font-weight: 700; color: var(--texto-3);
+  min-width: 72px; text-align: right;
+}
+.forca-senha[data-nivel="1"] .barra span { width: 25%;  background: var(--perigo); }
+.forca-senha[data-nivel="2"] .barra span { width: 50%;  background: var(--alerta); }
+.forca-senha[data-nivel="3"] .barra span { width: 75%;  background: var(--loteria); }
+.forca-senha[data-nivel="4"] .barra span { width: 100%; background: var(--acento); }
+
+.aviso-caps {
+  display: block; margin-top: .4rem; font-size: .78rem;
+  font-weight: 650; color: var(--alerta);
+}
+
+/* Uma área fixa para o recado: sem ela a mensagem de erro empurra o
+   botão para baixo e o clique seguinte cai no lugar errado. */
+.recado-login {
+  margin: .9rem 0 0; padding: .6rem .75rem; border-radius: 8px;
+  font-size: .84rem; line-height: 1.45;
+  border: 1px solid transparent;
+}
+.recado-login.erro {
+  color: var(--perigo); border-color: rgba(255,90,90,.35);
+  background: rgba(255,90,90,.08);
+}
+.recado-login.ok {
+  color: var(--acento); border-color: rgba(60,220,150,.3);
+  background: rgba(60,220,150,.07);
+}
+.recado-login code { font-size: .82em; }
+
+.btn.largo { width: 100%; justify-content: center; margin-top: .9rem; }
+.btn[aria-busy="true"] { opacity: .7; cursor: progress; }
+
+.rodape-login {
+  display: flex; justify-content: space-between; gap: .6rem;
+  margin-top: .9rem; flex-wrap: wrap;
+}
+.link-botao {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: var(--texto-3); font: inherit; font-size: .82rem;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.link-botao:hover { color: var(--loteria); }
+
+/* ---- conectado ---- */
+
+.cartao-conta {
+  display: flex; align-items: center; gap: .9rem;
+  border: 1px solid var(--borda); border-radius: var(--raio);
+  padding: .9rem 1rem; margin-bottom: .9rem;
+}
+.avatar {
+  width: 40px; height: 40px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--loteria); color: #06131f;
+  font-weight: 800; font-size: 1.05rem; text-transform: uppercase;
+}
+.dados-conta { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.dados-conta b { overflow-wrap: anywhere; }
+.selo-ok {
+  margin-left: auto; flex: none;
+  font-size: .7rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .05em; padding: .25rem .55rem; border-radius: 999px;
+  color: var(--acento); border: 1px solid rgba(60,220,150,.35);
+  background: rgba(60,220,150,.08);
+}
+.selo-ok[data-estado="pendente"] {
+  color: var(--alerta); border-color: rgba(255,176,32,.35);
+  background: rgba(255,176,32,.08);
+}
+
 #trocaSenha {
+  max-width: 380px; margin: .9rem auto 0;
   border: 1px solid var(--alerta); border-radius: var(--raio);
-  padding: .9rem; margin-top: .9rem;
+  padding: 1rem;
+}
+
+@media (max-width: 560px) {
+  .cartao-login, #trocaSenha { max-width: none; padding: 1rem; }
 }
 
 /* =================== aba Resultados =================== */

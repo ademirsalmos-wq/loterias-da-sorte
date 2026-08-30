@@ -1539,36 +1539,27 @@ function prepararBotaoInstalar() {
 /* ------------------------------------------------------------------ */
 
 async function renderNuvem() {
-  const cfg = await Nuvem.lerConfig();
+  const configurada = await Nuvem.estaConfigurada();
   const sessao = await Nuvem.sessaoAtual();
   const ultima = await Nuvem.ultimaSincronizacao();
-  const el = $('#estadoNuvem');
 
-  $('#nuvemUrl').value = cfg.url ?? '';
-  $('#nuvemChave').value = cfg.anonKey ?? '';
-
-  const configurada = Boolean(cfg.url && cfg.anonKey);
+  /* Três estados que se excluem: sem chaves, deslogado, conectado. */
+  $('#nuvemSemChaves').hidden = configurada;
   $('#loginNuvem').hidden = !configurada || Boolean(sessao);
-  $('#acoesNuvem').hidden = !sessao;
-  $('#detalhesNuvem').open = !configurada;
-  /* O bloco de senha nova só faz sentido conectado; ao sair, some junto. */
+  $('#nuvemConectado').hidden = !sessao;
   if (!sessao) $('#trocaSenha').hidden = true;
 
-  if (!configurada) {
-    el.innerHTML = `<p class="nota">Desligada. Os bilhetes ficam só neste aparelho.</p>`;
-    return;
-  }
-  if (!sessao) {
-    el.innerHTML = `<p class="nota">Configurada, mas você ainda não entrou.</p>`;
-    return;
-  }
-  el.innerHTML = `
-    <div class="linha-aberto">
-      <span class="qual">Conectado como <b>${sessao.email ?? 'sua conta'}</b></span>
-      <span class="quanto">${ultima
-        ? `última sincronização: ${new Date(ultima).toLocaleString('pt-BR')}`
-        : 'ainda não sincronizou'}</span>
-    </div>`;
+  if (!sessao) return;
+
+  const email = sessao.email ?? 'sua conta';
+  $('#emailConta').textContent = email;
+  $('#avatarConta').textContent = email.trim().charAt(0) || '?';
+  $('#ultimaSync').textContent = ultima
+    ? `última sincronização: ${new Date(ultima).toLocaleString('pt-BR')}`
+    : 'ainda não sincronizou neste aparelho';
+  const selo = $('#seloSync');
+  selo.textContent = ultima ? 'sincronizado' : 'pendente';
+  selo.dataset.estado = ultima ? 'ok' : 'pendente';
 }
 
 /** Sincroniza sem atrapalhar: falha de rede aqui não pode quebrar nada. */
@@ -1602,170 +1593,133 @@ async function sincronizarNuvem({ silencioso = true, completa = false } = {}) {
   }
 }
 
-/**
- * Lê o `role` de dentro de um JWT do Supabase, sem validar assinatura — aqui
- * não interessa autenticar nada, só saber QUAL chave foi colada.
- */
-function papelDaChave(chave) {
-  try {
-    const meio = chave.split('.')[1];
-    const json = atob(meio.replace(/-/g, '+').replace(/_/g, '/'));
-    return JSON.parse(json).role ?? null;
-  } catch { return null; }
-}
-
-$('#btnSalvarNuvem').addEventListener('click', async () => {
-  const url = $('#nuvemUrl').value.trim();
-  const chave = $('#nuvemChave').value.trim();
-  const aviso = (msg) => {
-    $('#statusNuvem').innerHTML = `<span style="color:var(--perigo)">${msg}</span>`;
-  };
-
-  /* Antes isto salvava qualquer coisa — inclusive nada — e mesmo assim
-     anunciava "Salvo. Agora entre com seu e-mail.". Com os campos vazios a
-     mensagem aparecia, o campo de e-mail continuava escondido (porque de fato
-     não havia configuração) e não sobrava nenhuma pista do que fazer. */
-  if (!url && !chave) return aviso('Preencha a Project URL e a chave anônima antes de salvar.');
-  if (!url) return aviso('Falta a Project URL.');
-  if (!chave) return aviso('Falta a chave anônima.');
-
-  if (!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test(url)) {
-    return aviso('A Project URL deve ser parecida com <b>https://abcdefgh.supabase.co</b>. ' +
-                 'Copie de Project Settings → API, campo <b>Project URL</b>.');
-  }
-
-  const papel = papelDaChave(chave);
-  if (papel === 'service_role') {
-    /* Esta chave dá acesso total ao banco, passando por cima do RLS. Num app
-       que roda no navegador ela ficaria à vista de qualquer um. */
-    return aviso('Essa é a chave <b>service_role</b>, que dá acesso total ao banco e ' +
-                 'não pode ficar num app de navegador. Use a <b>anon public</b>, logo acima dela.');
-  }
-  if (papel !== 'anon') {
-    return aviso('Isso não parece a chave anônima. Em Project Settings → API, copie o valor ' +
-                 'da linha <b>anon</b> <b>public</b> — começa com <code>eyJ</code>.');
-  }
-
-  await Nuvem.salvarConfig({ url, anonKey: chave });
-  await renderNuvem();
-
-  /* Só anuncia sucesso depois de confirmar que a configuração de fato colou. */
-  if (await Nuvem.estaConfigurada()) {
-    $('#statusNuvem').innerHTML =
-      'Salvo. Agora, no bloco que apareceu acima: <b>Criar conta</b> se é a primeira ' +
-      'vez, ou <b>Entrar</b> se você já tem conta e está ligando outro aparelho.';
-  } else {
-    aviso('Não consegui gravar a configuração neste navegador.');
-  }
-});
-
-$('#btnEnviarLink').addEventListener('click', async () => {
-  const email = $('#nuvemEmail').value.trim();
-  if (!email.includes('@')) return toast('Informe um e-mail válido.', true);
-  const btn = $('#btnEnviarLink');
-  btn.disabled = true; btn.textContent = 'Enviando…';
-  try {
-    await Nuvem.enviarLink(email);
-    $('#statusNuvem').innerHTML =
-      `<span style="color:var(--acento)">Link enviado para ${email}.</span>
-       Abra o e-mail <b>neste aparelho</b> e clique no link — você volta para cá já conectado.`;
-  } catch (e) {
-    $('#statusNuvem').innerHTML = `<span style="color:var(--perigo)">${e.message}</span>`;
-  } finally {
-    btn.disabled = false; btn.textContent = 'Receber link de acesso';
-  }
-});
-
 /* ---- conta: entrar / criar ---- */
 
 /** 'entrar' ou 'criar'. Uma tela só, dois modos — menos lugar para se perder. */
 let modoConta = 'entrar';
 
+const recado = (texto, tipo = 'erro') => {
+  const el = $('#recadoLogin');
+  el.className = `recado-login ${tipo}`;
+  el.innerHTML = texto;
+  el.hidden = false;
+};
+const limparRecado = () => { $('#recadoLogin').hidden = true; };
+
+/**
+ * Força da senha, medida pelo que de fato dificulta um ataque: tamanho
+ * primeiro, variedade depois. Não é uma nota de prova — é um empurrão
+ * visual, e por isso nunca impede de continuar.
+ */
+function forcaDaSenha(s) {
+  if (!s) return { nivel: 0, rotulo: '' };
+  let p = 0;
+  if (s.length >= 8) p++;
+  if (s.length >= 12) p++;
+  if (/[a-z]/.test(s) && /[A-Z]/.test(s)) p++;
+  if (/\d/.test(s) && /[^\w]/.test(s)) p++;
+  const nivel = Math.max(1, Math.min(4, p));
+  return { nivel, rotulo: ['', 'fraca', 'razoável', 'boa', 'ótima'][nivel] };
+}
+
 function aplicarModoConta() {
   const criando = modoConta === 'criar';
-  $$('.aba-login').forEach((b) => b.classList.toggle('ativa', b.dataset.modo === modoConta));
+  $$('.aba-login').forEach((b) => {
+    const ativa = b.dataset.modo === modoConta;
+    b.classList.toggle('ativa', ativa);
+    b.setAttribute('aria-selected', String(ativa));
+  });
   $('#btnConta').textContent = criando ? 'Criar conta' : 'Entrar';
   $('#nuvemSenha').setAttribute('autocomplete', criando ? 'new-password' : 'current-password');
   $('#btnEsqueciSenha').hidden = criando;
+  $('#btnTrocarModo').textContent = criando ? 'Já tenho conta' : 'Não tenho conta ainda';
+  $('#forcaSenha').hidden = !criando || !$('#nuvemSenha').value;
   $('#dicaSenha').textContent = criando
-    ? 'Mínimo de 8 caracteres. Anote num lugar seguro: sem SMTP próprio, a ' +
-      'recuperação por e-mail é limitada a 2 mensagens por hora.'
+    ? 'Mínimo de 8 caracteres. Anote num lugar seguro — a recuperação depende do seu e-mail.'
     : 'Use a mesma conta nos dois aparelhos — é ela que liga os bilhetes de um ao outro.';
 }
 
-/* Limpar o status é coisa de TROCAR de aba, não de redesenhar a aba atual.
-   Juntas numa função só, a chamada do `finally` apagava a mensagem de erro
-   que o `catch` acabara de escrever — e a senha errada falhava em silêncio. */
-$$('.aba-login').forEach((b) =>
-  b.addEventListener('click', () => {
-    modoConta = b.dataset.modo;
-    aplicarModoConta();
-    $('#statusNuvem').textContent = '';
-  })
-);
+const trocarModo = (m) => { modoConta = m; aplicarModoConta(); limparRecado(); };
+
+$$('.aba-login').forEach((b) => b.addEventListener('click', () => trocarModo(b.dataset.modo)));
+$('#btnTrocarModo').addEventListener('click', () =>
+  trocarModo(modoConta === 'criar' ? 'entrar' : 'criar'));
+
+/** Mostrar/esconder senha, reaproveitado pelos dois campos. */
+function ligarOlho(idBotao, idCampo) {
+  $(idBotao).addEventListener('click', () => {
+    const campo = $(idCampo);
+    const vendo = campo.type === 'text';
+    campo.type = vendo ? 'password' : 'text';
+    $(idBotao).textContent = vendo ? 'ver' : 'ocultar';
+    $(idBotao).setAttribute('aria-label', vendo ? 'Mostrar a senha' : 'Ocultar a senha');
+    campo.focus();
+  });
+}
+ligarOlho('#verSenha', '#nuvemSenha');
+ligarOlho('#verSenhaNova', '#senhaNova');
+
+$('#nuvemSenha').addEventListener('input', (ev) => {
+  if (modoConta !== 'criar') return;
+  const f = forcaDaSenha(ev.target.value);
+  const el = $('#forcaSenha');
+  el.hidden = !ev.target.value;
+  el.dataset.nivel = String(f.nivel);
+  el.querySelector('.rotulo').textContent = f.rotulo;
+});
+
+/* Caps Lock ligado é a causa silenciosa nº 1 de "minha senha não funciona". */
+['keyup', 'keydown'].forEach((evt) =>
+  $('#nuvemSenha').addEventListener(evt, (ev) => {
+    const ligado = typeof ev.getModifierState === 'function' && ev.getModifierState('CapsLock');
+    $('#avisoCaps').hidden = !ligado;
+  }));
+$('#nuvemSenha').addEventListener('blur', () => { $('#avisoCaps').hidden = true; });
+
+async function ocupado(btn, rotulo, tarefa) {
+  const antes = btn.textContent;
+  btn.disabled = true; btn.setAttribute('aria-busy', 'true'); btn.textContent = rotulo;
+  try { return await tarefa(); }
+  finally { btn.disabled = false; btn.removeAttribute('aria-busy'); btn.textContent = antes; }
+}
 
 $('#formConta').addEventListener('submit', async (ev) => {
   ev.preventDefault();
+  limparRecado();
   const email = $('#nuvemEmail').value.trim();
   const senha = $('#nuvemSenha').value;
-  const erro = (m) => { $('#statusNuvem').innerHTML = `<span style="color:var(--perigo)">${m}</span>`; };
 
-  if (!email.includes('@')) return erro('Informe um e-mail válido.');
-  if (!senha) return erro('Informe a senha.');
-  /* O padrão do Supabase aceita 6. Exigimos 8 porque esta senha protege dados
-     que ficam num banco acessível pela internet, e não custa nada ao usuário. */
+  if (!email.includes('@') || email.length < 5) return recado('Informe um e-mail válido.');
+  if (!senha) return recado('Informe a senha.');
+  /* O Firebase aceita 6; exigimos 8 na criação porque esta senha protege
+     dados num banco aberto à internet, e o custo para o usuário é zero. */
   if (modoConta === 'criar' && senha.length < 8) {
-    return erro('A senha precisa de pelo menos 8 caracteres.');
+    return recado('A senha precisa de pelo menos 8 caracteres.');
   }
 
-  const btn = $('#btnConta');
-  btn.disabled = true;
-  btn.textContent = modoConta === 'criar' ? 'Criando…' : 'Entrando…';
-
   try {
-    if (modoConta === 'criar') {
-      const r = await Nuvem.criarConta(email, senha);
-      if (r.precisaConfirmar) {
-        $('#statusNuvem').innerHTML =
-          `Conta criada para <b>${email}</b>, mas este projeto exige confirmação por
-           e-mail. Abra a mensagem que o Supabase enviou e clique no link. Para
-           dispensar essa etapa, desligue <b>Confirm email</b> em
-           Authentication → Providers → Email.`;
-        return;
-      }
-      $('#nuvemSenha').value = '';
-      await renderNuvem();
-      toast('Conta criada e conectada.');
-      await sincronizarNuvem({ silencioso: false });
-    } else {
-      await Nuvem.entrarComSenha(email, senha);
-      $('#nuvemSenha').value = '';
-      await renderNuvem();
-      toast('Conectado.');
-      await sincronizarNuvem({ silencioso: false });
-    }
+    await ocupado($('#btnConta'), modoConta === 'criar' ? 'Criando…' : 'Entrando…', async () => {
+      if (modoConta === 'criar') await Nuvem.criarConta(email, senha);
+      else await Nuvem.entrarComSenha(email, senha);
+    });
+    $('#nuvemSenha').value = '';
+    $('#forcaSenha').hidden = true;
+    await renderNuvem();
+    toast(modoConta === 'criar' ? 'Conta criada e conectada.' : 'Conectado.');
+    await sincronizarNuvem({ silencioso: false });
   } catch (e) {
-    erro(e.message);
-  } finally {
-    btn.disabled = false;
-    aplicarModoConta();
+    recado(e.message);
   }
 });
 
 $('#btnEsqueciSenha').addEventListener('click', async () => {
   const email = $('#nuvemEmail').value.trim();
-  if (!email.includes('@')) return toast('Escreva seu e-mail no campo acima primeiro.', true);
-  const btn = $('#btnEsqueciSenha');
-  btn.disabled = true;
+  if (!email.includes('@')) return recado('Escreva seu e-mail no campo acima primeiro.');
   try {
-    await Nuvem.pedirRedefinicaoDeSenha(email);
-    $('#statusNuvem').innerHTML =
-      `<span style="color:var(--acento)">Enviado para ${email}.</span>
-       Abra o e-mail <b>neste aparelho</b> — o link traz você de volta para escolher a senha nova.`;
+    await ocupado($('#btnEsqueciSenha'), 'Enviando…', () => Nuvem.pedirRedefinicaoDeSenha(email));
+    recado(`Enviado para <b>${email}</b>. Abra o e-mail e siga o link para escolher a senha nova.`, 'ok');
   } catch (e) {
-    $('#statusNuvem').innerHTML = `<span style="color:var(--perigo)">${e.message}</span>`;
-  } finally {
-    btn.disabled = false;
+    recado(e.message);
   }
 });
 
@@ -1774,20 +1728,21 @@ $('#btnMudarSenha').addEventListener('click', () => {
   $('#senhaNova').focus();
 });
 
+$('#btnCancelarSenha').addEventListener('click', () => {
+  $('#senhaNova').value = '';
+  $('#trocaSenha').hidden = true;
+});
+
 $('#btnTrocarSenha').addEventListener('click', async () => {
   const nova = $('#senhaNova').value;
   if (nova.length < 8) return toast('A senha precisa de pelo menos 8 caracteres.', true);
-  const btn = $('#btnTrocarSenha');
-  btn.disabled = true; btn.textContent = 'Salvando…';
   try {
-    await Nuvem.trocarSenha(nova);
+    await ocupado($('#btnTrocarSenha'), 'Salvando…', () => Nuvem.trocarSenha(nova));
     $('#senhaNova').value = '';
     $('#trocaSenha').hidden = true;
     toast('Senha alterada.');
   } catch (e) {
     $('#statusNuvem').innerHTML = `<span style="color:var(--perigo)">${e.message}</span>`;
-  } finally {
-    btn.disabled = false; btn.textContent = 'Salvar senha nova';
   }
 });
 
@@ -1898,23 +1853,6 @@ async function iniciar() {
   if (await DB.getConfig('avisoLido', false)) {
     $('.aviso-honesto').style.display = 'none';
   }
-
-  // O link de acesso do e-mail devolve os tokens na própria URL.
-  try {
-    const volta = await Nuvem.capturarRetornoDoLink();
-    if (volta?.tipo === 'recovery') {
-      /* Link de "esqueci a senha": a sessão abre, mas a redefinição só termina
-         quando ele escolher a senha nova. Levamos direto para o campo. */
-      $$('.aba').forEach((a) => a.classList.remove('ativa'));
-      $$('.tela').forEach((t) => t.classList.remove('ativa'));
-      $('.aba[data-alvo="config"]').classList.add('ativa');
-      $('#config').classList.add('ativa');
-      $('#trocaSenha').hidden = false;
-      toast('Escolha agora a sua senha nova.');
-    } else if (volta) {
-      toast(`Conectado${volta.email ? ` como ${volta.email}` : ''}.`);
-    }
-  } catch (e) { console.warn('[nuvem] retorno do link:', e.message); }
 
   montarSeletorLoteria();
   await trocarLoteria();
