@@ -522,9 +522,17 @@
 
     <details class="filtros" id="detalhesNuvem">
       <summary>Configurar o Supabase</summary>
-      <p class="nota">Crie um projeto (uma organização free nova, se as suas
-        duas já estão ocupadas), rode o <code>supabase/schema.sql</code> no SQL
-        Editor e cole abaixo os dados de <b>Project Settings → API</b>.</p>
+      <p class="nota"><b>Não precisa de projeto novo.</b> A tabela se chama
+        <code>loterias_bilhetes</code>, com prefixo justamente para conviver com
+        outra aplicação: rode o <code>supabase/schema.sql</code> no SQL Editor de
+        um projeto que você já usa. O limite do plano free é de 500 MB de banco,
+        não de tabelas, e estes bilhetes ocupam alguns kilobytes.</p>
+      <p class="nota">Depois cole abaixo os dados de
+        <b>Project Settings → API</b>. A chave certa é a <b>anon public</b> —
+        nunca a <code>service_role</code>, que dá acesso total ao banco.</p>
+      <p class="nota">E em <b>Authentication → URL Configuration</b>, ponha o
+        endereço deste site em <b>Site URL</b> e em <b>Redirect URLs</b>. Sem
+        isso o link do e-mail não traz você de volta para cá.</p>
       <div class="campo">
         <label>Project URL</label>
         <input type="text" id="nuvemUrl" placeholder="https://xxxx.supabase.co">
@@ -539,17 +547,53 @@
     </details>
 
     <div id="loginNuvem" hidden>
-      <div class="campo">
-        <label>Seu e-mail</label>
-        <input type="text" id="nuvemEmail" placeholder="voce@exemplo.com">
-        <span class="nota">Você recebe um link de acesso. Sem senha para criar
-          nem guardar — abra o link neste aparelho e pronto.</span>
+      <div class="abas-login">
+        <button class="aba-login ativa" data-modo="entrar" type="button">Entrar</button>
+        <button class="aba-login" data-modo="criar" type="button">Criar conta</button>
       </div>
-      <button class="btn primario" id="btnEnviarLink">Receber link de acesso</button>
+
+      <form id="formConta" autocomplete="on">
+        <div class="campo">
+          <label for="nuvemEmail">E-mail</label>
+          <input type="email" id="nuvemEmail" name="email"
+                 autocomplete="username" placeholder="voce@exemplo.com">
+        </div>
+        <div class="campo">
+          <label for="nuvemSenha">Senha</label>
+          <input type="password" id="nuvemSenha" name="password"
+                 autocomplete="current-password" placeholder="sua senha">
+          <span class="nota" id="dicaSenha">Use a mesma conta nos dois aparelhos —
+            é ela que liga os bilhetes de um ao outro.</span>
+        </div>
+        <div class="botoes">
+          <button class="btn primario" id="btnConta" type="submit">Entrar</button>
+          <button class="btn fantasma" id="btnEsqueciSenha" type="button">Esqueci a senha</button>
+        </div>
+      </form>
+
+      <details class="filtros" id="detalhesLink">
+        <summary>Entrar sem senha, por link de e-mail</summary>
+        <p class="nota">Serve para entrar num aparelho sem digitar a senha. O
+          Supabase envia <b>no máximo 2 e-mails por hora</b> no serviço embutido,
+          então nos dois aparelhos seguidos ele costuma recusar — por isso a
+          senha é o caminho principal.</p>
+        <button class="btn" id="btnEnviarLink" type="button">Receber link de acesso</button>
+      </details>
+    </div>
+
+    <div id="trocaSenha" hidden>
+      <p class="nota"><b>Escolha a senha nova.</b> Você entrou por um link de
+        redefinição — a troca só vale depois de confirmar aqui.</p>
+      <div class="campo">
+        <label for="senhaNova">Senha nova</label>
+        <input type="password" id="senhaNova" autocomplete="new-password">
+      </div>
+      <button class="btn primario" id="btnTrocarSenha" type="button">Salvar senha nova</button>
     </div>
 
     <div class="botoes" id="acoesNuvem" hidden>
       <button class="btn primario" id="btnSincronizarNuvem">Sincronizar agora</button>
+      <button class="btn fantasma" id="btnMudarSenha">Mudar a senha</button>
       <button class="btn fantasma" id="btnSairNuvem">Sair desta conta</button>
     </div>
     <p class="nota" id="statusNuvem"></p>

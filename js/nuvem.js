@@ -114,12 +114,142 @@ async function tokenValido() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Login por link de e-mail                                            */
+/* Conta: e-mail e senha                                               */
+/*                                                                     */
+/* O login nasceu por link de e-mail, sem senha. Caiu por um motivo    */
+/* prático: o SMTP embutido do Supabase manda DUAS mensagens por hora, */
+/* e ligar o segundo aparelho gasta as duas. Além disso, uma conta de  */
+/* verdade é o alicerce de qualquer cobrança futura — assinatura se    */
+/* prende a um usuário, não a um link que expira.                      */
+/*                                                                     */
+/* O link mágico continua aqui, como caminho alternativo, e o e-mail   */
+/* passa a ser só recuperação de senha.                                */
+/* ------------------------------------------------------------------ */
+
+/** Mensagem de erro do Supabase, traduzida e com o que fazer a respeito. */
+function erroDeAuth(status, cru, destino) {
+  if (status === 429 || /rate limit/i.test(cru)) {
+    return 'O Supabase só envia 2 e-mails por hora no serviço embutido, e esse limite ' +
+      'acabou de estourar. Espere uma hora — ou configure um SMTP próprio em ' +
+      'Authentication → Emails, que sobe para 30 por hora.';
+  }
+  if (/invalid login credentials/i.test(cru)) {
+    return 'E-mail ou senha não conferem. Se esta é a primeira vez neste aparelho, ' +
+      'use "Criar conta" em vez de "Entrar".';
+  }
+  if (/user already registered|already been registered/i.test(cru)) {
+    return 'Já existe conta com este e-mail. Use "Entrar" — e se esqueceu a senha, ' +
+      'peça a redefinição.';
+  }
+  if (/email not confirmed/i.test(cru)) {
+    return 'A conta existe mas o e-mail ainda não foi confirmado. Confirme pelo link ' +
+      'que o Supabase enviou, ou desligue a confirmação em ' +
+      'Authentication → Providers → Email (opção "Confirm email").';
+  }
+  if (/password.*(short|least|6|characters)/i.test(cru)) {
+    return 'Senha curta demais para o que o projeto exige.';
+  }
+  if (/redirect|not allowed/i.test(cru)) {
+    return `O Supabase recusou o endereço de retorno (${destino}). Vá em ` +
+      'Authentication → URL Configuration e ponha esse endereço em Site URL e em Redirect URLs.';
+  }
+  if (/signups? not allowed|disabled/i.test(cru)) {
+    return 'Este projeto está com novos cadastros desligados. Ligue em ' +
+      'Authentication → Providers → Email.';
+  }
+  return cru ? `Supabase: ${cru}` : `Supabase respondeu ${status}.`;
+}
+
+async function postAuth(caminho, corpo) {
+  const cfg = await lerConfig();
+  if (!cfg.url || !cfg.anonKey) throw new Error('Configure a URL e a chave do Supabase primeiro.');
+
+  const destino = location.origin + location.pathname;
+  const r = await fetch(`${cfg.url}/auth/v1/${caminho}`, {
+    method: 'POST',
+    headers: { apikey: cfg.anonKey, 'content-type': 'application/json' },
+    body: JSON.stringify(corpo),
+  });
+
+  const dados = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    throw new Error(erroDeAuth(r.status, dados.msg || dados.error_description || dados.error || '', destino));
+  }
+  return dados;
+}
+
+/** Guarda o que o Supabase devolve depois de um login bem-sucedido. */
+async function guardarRetornoDeLogin(d) {
+  if (!d.access_token) return null;
+  await salvarSessao({
+    access_token: d.access_token,
+    refresh_token: d.refresh_token ?? null,
+    email: d.user?.email ?? null,
+    expira_em: Date.now() + (d.expires_in ?? 3600) * 1000,
+  });
+  return { email: d.user?.email ?? null };
+}
+
+/**
+ * Cria a conta. Se o projeto exigir confirmação por e-mail, o Supabase
+ * responde SEM tokens — daí o retorno distinguir os dois casos, para a tela
+ * poder dizer a verdade em vez de fingir que já entrou.
+ */
+export async function criarConta(email, senha) {
+  const d = await postAuth('signup', {
+    email,
+    password: senha,
+    options: { emailRedirectTo: location.origin + location.pathname },
+  });
+  const sessao = await guardarRetornoDeLogin(d);
+  return sessao
+    ? { entrou: true, email: sessao.email }
+    : { entrou: false, email, precisaConfirmar: true };
+}
+
+/** Entra numa conta existente. */
+export async function entrarComSenha(email, senha) {
+  const d = await postAuth('token?grant_type=password', { email, password: senha });
+  const s = await guardarRetornoDeLogin(d);
+  if (!s) throw new Error('O Supabase não devolveu a sessão.');
+  return s;
+}
+
+/** Dispara o e-mail de redefinição de senha (sujeito ao teto de 2 por hora). */
+export async function pedirRedefinicaoDeSenha(email) {
+  await postAuth('recover', { email, redirect_to: location.origin + location.pathname });
+  return { email };
+}
+
+/**
+ * Troca a senha da sessão aberta. Serve tanto para mudar por vontade própria
+ * quanto para concluir a redefinição, já que o link de recuperação abre o app
+ * com uma sessão válida.
+ */
+export async function trocarSenha(nova) {
+  const cfg = await lerConfig();
+  const token = await tokenValido();
+  const r = await fetch(`${cfg.url}/auth/v1/user`, {
+    method: 'PUT',
+    headers: {
+      apikey: cfg.anonKey,
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ password: nova }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(erroDeAuth(r.status, d.msg || d.error_description || '', ''));
+  return { email: d.email ?? null };
+}
+
+/* ------------------------------------------------------------------ */
+/* Login por link de e-mail (caminho alternativo)                      */
 /* ------------------------------------------------------------------ */
 
 /**
- * Manda o link mágico. Sem senha — nada para guardar, nada para vazar, e
- * funciona igual nos dois aparelhos.
+ * Manda o link mágico. Continua útil para entrar num aparelho sem digitar
+ * senha, mas esbarra no teto de 2 e-mails por hora do SMTP embutido.
  */
 export async function enviarLink(email) {
   const cfg = await lerConfig();
@@ -134,7 +264,9 @@ export async function enviarLink(email) {
 
   if (!r.ok) {
     const erro = await r.json().catch(() => ({}));
-    throw new Error(erro.msg || erro.error_description || `Supabase respondeu ${r.status}`);
+    throw new Error(
+      erroDeAuth(r.status, erro.msg || erro.error_description || erro.error || '', destino)
+    );
   }
   return { destino };
 }
@@ -165,7 +297,11 @@ export async function capturarRetornoDoLink() {
   });
 
   history.replaceState(null, '', location.pathname + location.search);
-  return { email };
+
+  /* `type=recovery` é o link de "esqueci a senha": ele abre o app com sessão
+     válida, mas o usuário ainda precisa escolher a senha nova. Sem devolver
+     isso, a tela diria só "conectado" e a redefinição ficaria pela metade. */
+  return { email, tipo: p.get('type') ?? null };
 }
 
 /* ------------------------------------------------------------------ */

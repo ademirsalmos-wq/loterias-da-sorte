@@ -567,6 +567,26 @@ input[type=number].premio-input {
 }
 .faixa-atualizacao .link { color: #06131f; opacity: .75; }
 
+/* =================== login da nuvem =================== */
+
+.abas-login {
+  display: flex; gap: .3rem; margin-bottom: .9rem;
+  border-bottom: 1px solid var(--borda);
+}
+.aba-login {
+  background: none; border: 0; cursor: pointer;
+  color: var(--texto-3); font: inherit; font-weight: 650;
+  padding: .5rem .9rem; border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.aba-login:hover { color: var(--texto); }
+.aba-login.ativa { color: var(--loteria); border-bottom-color: var(--loteria); }
+
+#trocaSenha {
+  border: 1px solid var(--alerta); border-radius: var(--raio);
+  padding: .9rem; margin-top: .9rem;
+}
+
 /* =================== aba Resultados =================== */
 
 .grid-resultados { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
