@@ -1652,7 +1652,8 @@ $('#btnSalvarNuvem').addEventListener('click', async () => {
   /* Só anuncia sucesso depois de confirmar que a configuração de fato colou. */
   if (await Nuvem.estaConfigurada()) {
     $('#statusNuvem').innerHTML =
-      'Salvo. Agora digite seu e-mail no campo que apareceu acima e peça o link de acesso.';
+      'Salvo. Agora, no bloco que apareceu acima: <b>Criar conta</b> se é a primeira ' +
+      'vez, ou <b>Entrar</b> se você já tem conta e está ligando outro aparelho.';
   } else {
     aviso('Não consegui gravar a configuração neste navegador.');
   }
