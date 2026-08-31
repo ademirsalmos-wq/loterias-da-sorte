@@ -280,7 +280,7 @@ function renderMelhores(r, l, jogos) {
   $('#retroMelhores').innerHTML = `<div class="rolagem"><table>
     <thead><tr>
       <th>Concurso</th><th>Dezenas sorteadas</th>
-      <th>Melhor</th><th>Premiados</th><th>Retorno</th>
+      <th>Seu melhor acerto</th><th>Premiados</th><th>Retorno</th>
     </tr></thead>
     <tbody>${r.melhores
       .map((m) => {
@@ -289,12 +289,17 @@ function renderMelhores(r, l, jogos) {
         return `<tr>
         <td><b>${m.numero}</b></td>
         <td><div class="dezenas-concurso">${m.dezenas
-          .map(
-            (d) =>
-              `<span class="bolinha ${campeao.has(d) ? 'acerto' : ''}">${fmt(d, l)}</span>`
-          )
+          .map((d) => {
+            const pegou = campeao.has(d);
+            /* O `title` existe porque a diferença é só de cor, e cor é
+               justamente o que falha em tela pequena, no sol e para quem
+               não distingue verde. */
+            return `<span class="bolinha ${pegou ? 'acerto' : 'escapou'}"
+              title="${fmt(d, l)} — ${pegou ? 'seu melhor bilhete acertou' : 'escapou'}"
+              >${fmt(d, l)}</span>`;
+          })
           .join('')}</div></td>
-        <td><b>${m.melhor}</b> pts</td>
+        <td><b>${m.melhor}</b> de ${l.sorteadas}</td>
         <td>${m.premiados}</td>
         <td>${m.retorno.total ? brl(m.retorno.total) : '<span class="nota">—</span>'}</td>
       </tr>`;

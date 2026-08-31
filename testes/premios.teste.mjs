@@ -409,6 +409,63 @@ export default async function rodar() {
   t.confere('a tela conta o que aconteceu',
     /pronto/i.test(depoisDoClique.progresso), depoisDoClique.progresso);
 
+  /* ---------------- a tabela de melhores concursos -------------------- */
+
+  /* O usuário leu "5 pts" no concurso 147 da Mega-Sena como "saíram 5
+     dezenas" e reportou como erro. Não era: saíram as 6, e o melhor bilhete
+     dele pegou 5. Mas para responder isso eu tive que AMPLIAR o print e
+     contar bolinha por bolinha — sinal de que faltava a verificação óbvia.
+     São dois invariantes, e nenhum deles pode quebrar em silêncio:
+
+       1. a linha mostra TODAS as dezenas que o concurso sorteou;
+       2. o número de bolinhas verdes é exatamente o que a coluna afirma.
+
+     Se o segundo quebrar, a tabela está apontando o bilhete errado — e aí a
+     leitura do usuário estaria certa e a minha, errada. */
+
+  await irPara(p, 'retrospectiva');
+  await p.waitForTimeout(600);
+  await p.selectOption('#retroFonte', 'todos').catch(() => {});
+  await p.waitForTimeout(400);
+  await p.click('#btnVarrer');
+  await p.waitForFunction(
+    () => document.querySelector('#retroMelhores tbody tr'),
+    null, { timeout: 60000 }
+  );
+  await p.waitForTimeout(500);
+
+  const tabela = await p.evaluate(async () => {
+    const { LOTERIAS } = await import('/js/config.js');
+    const sorteadas = LOTERIAS.lotofacil.sorteadas;
+    return [...document.querySelectorAll('#retroMelhores tbody tr')].map((tr) => {
+      const bolinhas = [...tr.querySelectorAll('.bolinha')];
+      const colunas = [...tr.querySelectorAll('td')];
+      return {
+        concurso: colunas[0]?.textContent.trim(),
+        total: bolinhas.length,
+        verdes: bolinhas.filter((b) => b.classList.contains('acerto')).length,
+        declarado: Number(colunas[2]?.textContent.trim().match(/^(\d+)/)?.[1] ?? -1),
+        sorteadas,
+      };
+    });
+  });
+
+  t.confere('a tabela de melhores concursos tem linhas', tabela.length > 0,
+    `${tabela.length} linhas`);
+
+  const faltouDezena = tabela.filter((r) => r.total !== r.sorteadas);
+  t.confere('cada linha mostra TODAS as dezenas que o concurso sorteou',
+    faltouDezena.length === 0,
+    faltouDezena.map((r) => `${r.concurso}: ${r.total}/${r.sorteadas}`).join(' · '));
+
+  const naoBate = tabela.filter((r) => r.verdes !== r.declarado);
+  t.confere('o nº de dezenas verdes é exatamente o acerto que a coluna declara',
+    naoBate.length === 0,
+    naoBate.map((r) => `${r.concurso}: ${r.verdes} verdes vs ${r.declarado} declarado`).join(' · '));
+
+  const semClasse = tabela.filter((r) => r.total - r.verdes < 0);
+  t.confere('nenhuma bolinha fica sem classificação', semClasse.length === 0);
+
   /* ---------------- a parede do 403 --------------------------------- */
 
   /* Aconteceu em produção: o download da Lotofácil inteira completou, a

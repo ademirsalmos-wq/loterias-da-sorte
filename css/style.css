@@ -426,6 +426,20 @@ tbody tr:hover { background: rgba(255,255,255,.02); }
 .bolinha.acerto { background: var(--acento); border-color: var(--acento); color: #06131f; }
 .bolinha.sorteada { background: var(--loteria); border-color: var(--loteria); color: #06131f; }
 
+/* A dezena que o bilhete NÃO pegou, na tabela de melhores concursos.
+   Antes ela usava só o estilo base, e ao lado de uma bolinha verde chapada
+   a diferença ficava sutil demais em tela pequena — a ponto de a tabela ser
+   lida como "saíram 5 dezenas" num concurso de 6. Agora ela recua de vez:
+   apagada, sem preenchimento e com a borda tracejada, para a diferença não
+   depender só de enxergar cor. */
+.bolinha.escapou {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--borda);
+  color: var(--texto-3);
+  opacity: .75;
+}
+
 /* --------------------------- prévia --------------------------- */
 
 .previa {
