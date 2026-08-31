@@ -29,6 +29,7 @@
  */
 
 import { LOTERIAS, universoDe } from './config.js';
+import { valorDaFaixa } from './premios.js';
 
 /* ------------------------------------------------------------------ */
 /* Núcleo da varredura                                                 */
@@ -91,17 +92,49 @@ function varrerAcertos(jogos, concursos, loteria, aoProgredir) {
   return porConcurso;
 }
 
-/** Quanto este concurso teria pago, dada a tabela de prêmios informada. */
-function retornoDoConcurso(linha, premios) {
-  let fixo = 0;
+/**
+ * Quanto este concurso teria pago.
+ *
+ * A resposta sai em duas pilhas que NÃO devem ser somadas sem aviso:
+ *
+ *  - `apurado`  — o rateio que a Caixa realmente pagou naquele concurso,
+ *                 mais as faixas de valor fixo por regulamento. É fato.
+ *  - `estimado` — o palpite do usuário, usado só onde não há apurado.
+ *
+ * `acumuladas` conta as faixas que o bilhete bateu num concurso em que
+ * ninguém levou aquela faixa. Ali o valor real teria sido o acumulado, que
+ * a Caixa não publica por bilhete — e é justamente o prêmio máximo. Somar
+ * zero nesses casos faria a Retrospectiva anunciar retorno zero no concurso
+ * em que o bilhete simulado teria ganhado tudo.
+ *
+ * @param {object} linha              uma linha da varredura
+ * @param {object} estimados          `{acertos: valor}` informado pelo usuário
+ * @param {object} loteria
+ * @param {object|null} rateio        `{acertos: [valor, ganhadores]}` do concurso
+ */
+function retornoDoConcurso(linha, estimados, loteria, rateio, semValor) {
+  let apurado = 0;
   let estimado = 0;
+  let acumuladas = 0;
+
   for (const [acertos, quantidade] of linha.faixas) {
-    const p = premios?.[acertos];
-    if (!p || !p.valor) continue;
-    if (p.fixo) fixo += p.valor * quantidade;
-    else estimado += p.valor * quantidade;
+    const { valor, fonte } = valorDaFaixa(loteria, acertos, rateio, estimados);
+    if (fonte === 'acumulou') { acumuladas += quantidade; continue; }
+    if (!valor) {
+      /* Faixa batida que não somou nada por falta de número — nem rateio,
+         nem valor fixo, nem estimativa. É o que o aviso da tela precisa
+         reportar, e precisa ser contado AQUI, olhando o que a varredura
+         realmente encontrou. Deduzir isso da tabela estática de prêmios
+         fazia a tela avisar que a faixa de 15 foi ignorada logo acima de um
+         retorno apurado que era quase todo feito dela. */
+      semValor?.set(acertos, (semValor.get(acertos) ?? 0) + quantidade);
+      continue;
+    }
+    if (fonte === 'apurado' || fonte === 'fixo') apurado += valor * quantidade;
+    else estimado += valor * quantidade;
   }
-  return { fixo, estimado, total: fixo + estimado };
+
+  return { apurado, estimado, acumuladas, total: apurado + estimado };
 }
 
 /* ------------------------------------------------------------------ */
@@ -125,6 +158,15 @@ export function varrer(jogos, concursos, loteria, opcoes = {}) {
   const topN = opcoes.topN ?? 25;
   const custoPorConcurso = opcoes.custoPorConcurso ?? 0;
 
+  /* `rateios` é o que a Caixa pagou de verdade, concurso a concurso. Onde
+     ele existe, manda; onde não existe, cai na estimativa do usuário. Vazio
+     por padrão para não quebrar quem chama sem ele. */
+  const rateios = opcoes.rateios ?? {};
+  /* A tabela do usuário guarda `{acertos: {valor, fixo}}`; `valorDaFaixa`
+     quer só o número. */
+  const estimados = {};
+  for (const [k, v] of Object.entries(premios)) estimados[k] = v?.valor ?? 0;
+
   const linhas = varrerAcertos(jogos, concursos, loteria, opcoes.aoProgredir);
 
   /* --- distribuição do melhor acerto por concurso --- */
@@ -135,8 +177,12 @@ export function varrer(jogos, concursos, loteria, opcoes = {}) {
   const concursosComFaixa = new Map();
 
   let concursosPremiados = 0;
-  let retornoFixo = 0;
+  let retornoApurado = 0;
   let retornoEstimado = 0;
+  let faixasAcumuladas = 0;
+  let concursosSemRateio = 0;
+  /* Faixas que o conjunto bateu e que não somaram nada por falta de valor. */
+  const semValor = new Map();
   let somaMelhor = 0;
   let somaMedia = 0;
 
@@ -156,10 +202,14 @@ export function varrer(jogos, concursos, loteria, opcoes = {}) {
       concursosComFaixa.set(acertos, (concursosComFaixa.get(acertos) ?? 0) + 1);
     }
 
-    const r = retornoDoConcurso(linha, premios);
+    const rateio = rateios[linha.numero] ?? null;
+    if (!rateio) concursosSemRateio++;
+
+    const r = retornoDoConcurso(linha, estimados, loteria, rateio, semValor);
     linha.retorno = r;
-    retornoFixo += r.fixo;
+    retornoApurado += r.apurado;
     retornoEstimado += r.estimado;
+    faixasAcumuladas += r.acumuladas;
 
     if (linha.premiados > 0) {
       concursosPremiados++;
@@ -239,15 +289,30 @@ export function varrer(jogos, concursos, loteria, opcoes = {}) {
     financeiro: {
       custoPorConcurso,
       custoTotal,
-      retornoFixo,
+      /* Apurado = o que a Caixa pagou de fato + o que o regulamento garante.
+         Estimado = onde o sistema não tinha o número e usou o seu palpite.
+         Ficam separados porque a confiança nos dois é diferente, e um total
+         único esconderia isso. */
+      retornoApurado,
       retornoEstimado,
-      retornoTotal: retornoFixo + retornoEstimado,
-      saldo: retornoFixo + retornoEstimado - custoTotal,
-      roi: custoTotal ? ((retornoFixo + retornoEstimado - custoTotal) / custoTotal) * 100 : 0,
-      // Há faixa de rateio sem valor informado? Então o retorno está incompleto.
-      faltamValores: loteria.faixas.filter(
-        (f) => premios[f] && !premios[f].fixo && !premios[f].valor
-      ),
+      retornoTotal: retornoApurado + retornoEstimado,
+      saldo: retornoApurado + retornoEstimado - custoTotal,
+      roi: custoTotal ? ((retornoApurado + retornoEstimado - custoTotal) / custoTotal) * 100 : 0,
+
+      /* Quantos concursos do intervalo ainda não têm o rateio baixado. */
+      concursosSemRateio,
+      /* Faixas batidas em concurso que acumulou: o bilhete teria levado o
+         acumulado, que não é publicado por bilhete. Não entram na conta —
+         e por isso o retorno acima é um PISO, não um teto. */
+      faixasAcumuladas,
+
+      /* Faixas que estes jogos REALMENTE bateram e que ficaram sem número.
+         Só entra aqui o que a varredura encontrou — não o que a tabela de
+         estimativas deixou em branco. Uma faixa sem estimativa que o
+         conjunto nunca bateu não torna o retorno incompleto, e avisar sobre
+         ela era a tela contradizendo o próprio número que exibia. */
+      faltamValores: [...semValor.keys()].sort((a, b) => b - a),
+      ocorrenciasSemValor: [...semValor.values()].reduce((s, n) => s + n, 0),
     },
   };
 }

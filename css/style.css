@@ -494,6 +494,15 @@ textarea:focus { outline: none; border-color: var(--loteria); }
 .selo.fixo { background: rgba(74,222,128,.15); color: var(--acento); }
 .selo.rateio { background: rgba(251,191,36,.15); color: var(--alerta); }
 
+/* De onde veio o valor do prêmio, na tabela de bilhetes. Discreto de
+   propósito: é informação de conferência, não o dado principal da linha. */
+.selo.fonte-premio {
+  display: block; margin-top: .2rem;
+  background: none; padding: 0;
+  font-size: .6rem; font-weight: 650;
+  color: var(--texto-3); cursor: help;
+}
+
 .dezenas-concurso { display: flex; gap: .18rem; flex-wrap: wrap; }
 .dezenas-concurso .bolinha { width: 22px; height: 22px; font-size: .66rem; }
 
@@ -847,9 +856,24 @@ input[type=number].premio-input {
   background: var(--loteria); border-color: var(--loteria);
   color: #06131f;
 }
-/* Repetiu do concurso anterior: anel por fora, sem mudar a cor de fundo. */
+/* Repetiu do concurso anterior: a marca fica DENTRO da célula, sem mudar a
+   cor de fundo.
+   Era um anel por fora (`0 0 0 2px var(--fundo), 0 0 0 4px var(--alerta)`),
+   que ocupava 4px além da célula. Como o vão do grid também é 4px, na
+   Lotomania — 10 colunas apertadas — as marcas de células vizinhas se
+   encostavam. Por dentro isso não acontece, e a célula ocupa exatamente o
+   espaço que o grid reservou para ela, marcada ou não.
+   São 2px de amarelo no total: 1px na borda da célula e 1px por dentro.
+
+   `--separa-marca` é o terceiro anel: um fio escuro por dentro do amarelo.
+   Quem o define é `montarSeletorLoteria()`, a partir da modalidade. Só a
+   Lotomania precisa dele — o laranja dela é vizinho do amarelo e a borda
+   sumia na célula marcada. Nas outras a variável vale `transparent`, que
+   desenha nada: uma regra só, sem duplicar seletor por modalidade. */
 .cel-volante.repetida {
-  box-shadow: 0 0 0 2px var(--fundo), 0 0 0 4px var(--alerta);
+  border-color: var(--alerta);
+  box-shadow: inset 0 0 0 1px var(--alerta),
+              inset 0 0 0 2px var(--separa-marca, transparent);
 }
 .total-margem {
   display: flex; align-items: center; justify-content: center;
@@ -861,10 +885,16 @@ input[type=number].premio-input {
 .total-margem.canto { visibility: hidden; }
 
 .legenda-volante { margin-bottom: 1rem; }
-.anel-exemplo {
-  display: inline-block; width: 11px; height: 11px; border-radius: 3px;
+/* O quadradinho da legenda repete exatamente o que `.cel-volante.repetida`
+   faz — borda amarela mais 1px por dentro, sobre a cor da modalidade.
+   Se um dia a marca da célula mudar, esta regra muda junto: já perdemos
+   tempo com uma legenda descrevendo uma tela que não existia mais. */
+.marca-exemplo {
+  display: inline-block; width: 14px; height: 14px; border-radius: 4px;
   background: var(--loteria);
-  box-shadow: 0 0 0 1px var(--fundo-2), 0 0 0 3px var(--alerta);
+  border: 1px solid var(--alerta);
+  box-shadow: inset 0 0 0 1px var(--alerta),
+              inset 0 0 0 2px var(--separa-marca, transparent);
   vertical-align: middle; margin: 0 .35rem;
 }
 

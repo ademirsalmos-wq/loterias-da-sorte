@@ -164,6 +164,70 @@ export default async function rodar() {
       `${v.celulas} células, ${v.fora} fora da vista`);
   }
 
+  /* ---------------- a marca de "repetiu" cabe dentro da célula -------- */
+
+  /* A marca já foi um anel POR FORA (`0 0 0 4px`). Com o vão do grid em
+     4px, as marcas de células vizinhas se encostavam na Lotomania. Agora é
+     borda + 1px por dentro, então uma célula marcada tem que medir
+     exatamente o mesmo que as outras. E a legenda tem que descrever o que
+     a tela faz — já publicamos uma que não descrevia. */
+
+  await p.setViewportSize({ width: 1280, height: 900 });
+
+  /* O fio escuro que separa o amarelo da cor da célula existe SÓ na
+     Lotomania, cujo laranja é vizinho do amarelo. Nas outras a variável
+     vale `transparent`. Vale conferir modalidade por modalidade: a regra
+     do CSS é uma só, o que muda é o valor que o JS injeta. */
+  const SEPARACAO = { lotofacil: false, megasena: false, lotomania: true };
+
+  for (const [lot, precisa] of Object.entries(SEPARACAO)) {
+    await trocarLoteria(p, lot);
+    await irPara(p, 'resultados');
+
+    const m = await p.evaluate(() => {
+      const rep = document.querySelector('.cel-volante.repetida');
+      const comum = document.querySelector('.cel-volante:not(.repetida)');
+      const sel = document.querySelector('.marca-exemplo');
+      if (!rep || !comum || !sel) return { faltou: true };
+
+      const cr = getComputedStyle(rep), cs = getComputedStyle(sel);
+      const a = rep.getBoundingClientRect(), b = comum.getBoundingClientRect();
+      const fundo = getComputedStyle(document.documentElement)
+        .getPropertyValue('--fundo').trim();
+      return {
+        mesmoTamanho: Math.abs(a.width - b.width) < 0.5 && Math.abs(a.height - b.height) < 0.5,
+        sombraCelula: cr.boxShadow,
+        bordaCelula: cr.borderTopColor,
+        sombraLegenda: cs.boxShadow,
+        bordaLegenda: cs.borderTopColor,
+        variavel: getComputedStyle(document.documentElement)
+          .getPropertyValue('--separa-marca').trim(),
+        fundo,
+        textoLegenda: document.querySelector('.legenda-volante')?.textContent ?? '',
+      };
+    });
+
+    t.confere(`${lot}: existe célula repetida e o quadradinho da legenda`, !m.faltou);
+    if (m.faltou) continue;
+
+    t.confere(`${lot}: a marca não aumenta a célula (cabe dentro)`, m.mesmoTamanho === true);
+    t.confere(`${lot}: a marca é por dentro, em amarelo`,
+      /inset/.test(m.sombraCelula) && /251,\s*191,\s*36/.test(m.sombraCelula)
+      && /251,\s*191,\s*36/.test(m.bordaCelula),
+      `${m.bordaCelula} · ${m.sombraCelula}`);
+
+    /* `transparent` computa como `rgba(0, 0, 0, 0)` — não desenha nada. */
+    const temFio = !/transparent|rgba\(0,\s*0,\s*0,\s*0\)/.test(m.sombraCelula);
+    t.confere(`${lot}: fio escuro de separação ${precisa ? 'presente' : 'ausente'}`,
+      temFio === precisa, `--separa-marca: ${m.variavel} · ${m.sombraCelula}`);
+
+    t.confere(`${lot}: a legenda usa a MESMA marca da célula`,
+      m.sombraLegenda === m.sombraCelula && m.bordaLegenda === m.bordaCelula,
+      `célula ${m.sombraCelula} · legenda ${m.sombraLegenda}`);
+    t.confere(`${lot}: o texto da legenda não fala em "anel"`,
+      !/anel/i.test(m.textoLegenda));
+  }
+
   /* ---------------- fechamento não se aplica à Lotomania -------------- */
 
   await p.setViewportSize({ width: 1280, height: 900 });

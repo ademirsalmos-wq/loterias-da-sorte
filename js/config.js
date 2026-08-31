@@ -112,6 +112,11 @@ export const LOTERIAS = {
     apiCaixa: 'lotomania',
     maxDiasSemSorteio: 12,
     cor: '#F78100',
+    /* Laranja é vizinho do amarelo `--alerta` usado para marcar as dezenas
+       repetidas do concurso anterior: sem um fio escuro entre os dois, a
+       borda desaparece na célula marcada. Nas outras modalidades (magenta,
+       verde) o contraste já é grande e o fio não é necessário. */
+    marcaPrecisaSeparacao: true,
     // Universo 0..99 — única modalidade que usa o zero
     min: 0,
     max: 99,

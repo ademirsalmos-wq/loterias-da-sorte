@@ -24,7 +24,7 @@
  */
 
 /** Mude ao publicar: é o que dispara a limpeza do cache antigo. */
-const VERSAO = 'v19-2026-08-30';
+const VERSAO = 'v21-2026-08-31';
 const CACHE = `loterias-${VERSAO}`;
 
 /** O esqueleto do app. Se um destes faltar, a tela não abre. */
@@ -41,6 +41,7 @@ const ESSENCIAIS = [
   './js/db.js',
   './js/generator.js',
   './js/nuvem.js',
+  './js/premios.js',
   './js/pwa.js',
   './js/resultados-ui.js',
   './js/retro-ui.js',

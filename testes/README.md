@@ -36,6 +36,15 @@ o repositório não carrega um dump de milhares de concursos. Onde o teste
 precisa de um resultado *real* — conferência, valores de prêmio — ele traz
 o concurso escrito à mão, conferido contra a API oficial.
 
+**A Caixa também é simulada, e no formato exato da real.** `rateioFalso`
+reproduz `listaRateioPremio` como ela vem de verdade — inclusive a faixa que
+acumula, que chega com `valorPremio: 0.0` e `numeroDeGanhadores: 0`. Esse
+zero não é o valor do prêmio, é "ninguém levou": lê-lo como valor faz a
+Retrospectiva anunciar R$ 0,00 justamente nos concursos em que o bilhete
+teria levado tudo. As respostas de conferência do parser são reais, copiadas
+da API — Lotofácil 3774, Mega-Sena 2920 e 1 (1996), Lotomania 2820 e 1
+(1999), porque o número de faixas mudou ao longo dos anos.
+
 **O Firebase é simulado, mas fiel onde a API é traiçoeira.**
 `firebase-falso.mjs` reproduz de propósito as três coisas que já causaram
 bug silencioso: inteiro que trafega como *string*, renovação de token que
@@ -52,6 +61,7 @@ recusa acesso a dados de outro `uid`.
 | `matematica.teste.mjs` | garantia dos fechamentos por força bruta, conferência em todas as faixas (inclusive o zero da Lotomania), contabilidade recalculada por fora, validade dos bilhetes gerados |
 | `interface.teste.mjs` | as 8 abas em duas larguras, apagar e editar pela tabela, gerador e fechamento pelos botões, travamento com a aba escondida, volante em telas estreitas, troca de modalidade |
 | `conta.teste.mjs` | usar sem conta, entrar, dois aparelhos na mesma conta, exclusão que viaja, senha errada, troca de senha, backup que não vaza credencial e restore que não duplica |
+| `premios.teste.mjs` | o rateio da Caixa: parser contra respostas reais de 1996 a 2026, o zero que significa "acumulou", download em lotes retomável pelo botão, prêmio preenchido no bilhete sem pisar no valor digitado à mão |
 
 `ajuda.mjs` tem o encanamento: servidor, fixtures, atalhos de navegação.
 `rodar.mjs` é o runner.

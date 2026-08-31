@@ -176,7 +176,7 @@ export default async function rodar() {
     const n = h.concursos.length;
     return {
       app: {
-        retorno: r.financeiro.retornoFixo,
+        retorno: r.financeiro.retornoApurado,
         custo: r.financeiro.custoTotal,
         pct: r.resumo.pctPremiados,
         media: r.resumo.mediaMelhor,
@@ -191,7 +191,11 @@ export default async function rodar() {
   });
 
   const perto = (a, b) => Math.abs(a - b) < 0.001;
-  t.confere('retorno garantido bate com o cálculo independente',
+  /* Este teste roda SEM rateio baixado, então tudo o que entra é o valor
+     fixo do regulamento — que é o que `FIXO` acima reproduz à mão. Com o
+     rateio, o mesmo campo passa a somar também o apurado da Caixa, e é o
+     premios.teste.mjs que confere aquele caminho. */
+  t.confere('retorno apurado bate com o cálculo independente',
     perto(contas.app.retorno, contas.meu.retorno),
     `app ${contas.app.retorno} · recalculado ${contas.meu.retorno}`);
   t.confere('custo total bate', perto(contas.app.custo, contas.meu.custo));

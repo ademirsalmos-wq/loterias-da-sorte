@@ -184,6 +184,44 @@ export const DB = {
     return transacao(STORE_HISTORICO, 'readwrite', (os) => os.delete(loteriaId));
   },
 
+  /**
+   * Junta rateios ao registro do histórico, mexendo SÓ nessa parte.
+   *
+   * `salvarHistorico` substitui o registro inteiro, o que aqui seria um
+   * desastre: o download de prêmios roda em lotes de centenas de rodadas, e
+   * uma delas gravando o registro inteiro com um `concursos` desatualizado
+   * apagaria a base de sorteios de quem sincronizou no meio. Esta função lê,
+   * mescla e regrava tudo o que já existia; o único campo que ela introduz é
+   * `rateios`.
+   *
+   * Grava numa transação só, e não em `readonly` + `readwrite` separados,
+   * porque duas transações deixam uma janela entre a leitura e a escrita.
+   *
+   * @param {string} loteriaId
+   * @param {object} novos  `{ numero: { acertos: [valor, ganhadores] } }`
+   * @returns {number} quantos concursos entraram
+   */
+  async mesclarRateios(loteriaId, novos) {
+    const quantos = Object.keys(novos ?? {}).length;
+    if (!quantos) return 0;
+
+    return transacao(STORE_HISTORICO, 'readwrite', (os) => {
+      const pedido = os.get(loteriaId);
+      pedido.onsuccess = () => {
+        const reg = pedido.result;
+        // Sem histórico gravado não há em que pendurar o rateio. Criar um
+        // registro só com prêmios deixaria uma base sem sorteio nenhum.
+        if (!reg) return;
+        os.put({
+          ...reg,
+          rateios: { ...(reg.rateios ?? {}), ...novos },
+          rateiosAtualizadoEm: agora(),
+        });
+      };
+      return quantos;
+    });
+  },
+
   /* ---- bilhetes ---- */
 
   /** Normaliza o registro: garante id, data de alteração e lápide. */

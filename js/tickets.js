@@ -9,6 +9,7 @@
 import { LOTERIAS, brl } from './config.js';
 import { binomial } from './wheel.js';
 import { DB } from './db.js';
+import { valorDaFaixa } from './premios.js';
 
 /**
  * Custo de uma aposta.
@@ -54,18 +55,38 @@ export function montarBilhetes(loteriaId, jogos, meta = {}) {
  * Confere um bilhete contra um resultado.
  * Cuidado especial com a Lotomania: 0 acerto também é faixa premiada.
  */
-export function conferirBilhete(bilhete, dezenasSorteadas) {
+export function conferirBilhete(bilhete, dezenasSorteadas, rateioDoConcurso = null) {
   const loteria = LOTERIAS[bilhete.loteria];
   const sorteadas = new Set(dezenasSorteadas);
   let acertos = 0;
   for (const d of bilhete.dezenas) if (sorteadas.has(d)) acertos++;
 
-  return {
+  const novo = {
     ...bilhete,
     conferido: true,
     acertos,
     premiado: loteria.faixas.includes(acertos),
+    premio: bilhete.premio ?? 0,
+    premioFonte: bilhete.premioFonte ?? null,
   };
+
+  /* O que o usuário digitou é dele e não se toca. Preencher por cima
+     apagaria o valor que ele conferiu no comprovante — e ele digitou
+     justamente porque quis registrar aquele número. */
+  if (novo.premioFonte === 'manual') return novo;
+
+  /* Só entra valor que é FATO: o rateio publicado para aquele concurso ou o
+     valor garantido por regulamento. Estimativa não entra aqui: esta coluna
+     responde "quanto eu ganhei", e um palpite nela vira mentira somada no
+     saldo do Painel. A Retrospectiva, que é simulação, pode estimar; a
+     contabilidade dos bilhetes de verdade, não. */
+  const { valor, fonte } = valorDaFaixa(loteria, acertos, rateioDoConcurso);
+  if ((fonte === 'apurado' || fonte === 'fixo') && valor > 0) {
+    novo.premio = valor;
+    novo.premioFonte = fonte;
+  }
+
+  return novo;
 }
 
 /**
@@ -88,6 +109,15 @@ export async function conferirTodos(loteriaId, historico) {
   const porNumero = new Map(historico.map((c) => [c.numero, c.dezenas]));
   const bilhetes = await DB.listarBilhetes(loteriaId);
 
+  /* Os rateios são lidos aqui dentro, e não recebidos por parâmetro, de
+     propósito: `conferirTodos` é chamada de cinco lugares diferentes, e um
+     parâmetro novo que quatro deles esqueçam de passar não dá erro nenhum —
+     só faz o prêmio parar de ser preenchido em silêncio. Esse é exatamente
+     o tipo de falha que já custou semanas neste projeto. Uma leitura a mais
+     no IndexedDB é barata perto disso. */
+  const reg = await DB.lerHistorico(loteriaId);
+  const rateios = reg?.rateios ?? {};
+
   const atualizados = [];
   let conferidos = 0;
   let premiados = 0;
@@ -99,9 +129,7 @@ export async function conferirTodos(loteriaId, historico) {
     const sorteio = porNumero.get(Number(b.concurso));
     if (!sorteio) { aguardando++; continue; }
 
-    const novo = conferirBilhete(b, sorteio);
-    // Preserva o valor do prêmio já digitado pelo usuário.
-    novo.premio = b.premio ?? 0;
+    const novo = conferirBilhete(b, sorteio, rateios[Number(b.concurso)] ?? null);
     conferidos++;
     if (novo.premiado) premiados++;
     atualizados.push(novo);

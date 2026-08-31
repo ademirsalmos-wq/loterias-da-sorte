@@ -13,7 +13,7 @@
  * Por isso a grade traz as contagens por linha e por coluna nas margens: é
  * a resposta precisa para "como as dezenas se distribuíram no bilhete".
  *
- * E as dezenas repetidas do concurso anterior ganham um anel. Repetição é
+ * E as dezenas repetidas do concurso anterior ganham uma borda. Repetição é
  * a única relação real entre dois concursos vizinhos que dá para observar
  * — vale mostrar, desde que sem sugerir que ela prevê o próximo.
  */
@@ -192,7 +192,7 @@ export function mostrarConcurso(numero) {
     <p class="nota legenda-volante">
       Os números nas bordas são quantas dezenas caíram em cada linha e em cada coluna.
       ${anterior
-        ? 'As marcadas com anel <span class="anel-exemplo"></span> se repetiram do concurso anterior.'
+        ? 'As marcadas com borda amarela <span class="marca-exemplo"></span> se repetiram do concurso anterior.'
         : ''}
     </p>
 

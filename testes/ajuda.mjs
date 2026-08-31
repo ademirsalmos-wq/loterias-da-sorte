@@ -95,6 +95,73 @@ export function historicoFalso(loteria) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Caixa de mentira, no formato exato da de verdade                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * As faixas premiadas de cada modalidade, na ordem em que a Caixa devolve
+ * (do maior acerto para o menor, com o zero da Lotomania no fim).
+ */
+const FAIXAS = {
+  lotofacil: [15, 14, 13, 12, 11],
+  megasena: [6, 5, 4],
+  lotomania: [20, 19, 18, 17, 16, 15, 0],
+};
+
+/**
+ * Monta `listaRateioPremio` no formato conferido contra a API real em
+ * Lotofácil 3774, Mega-Sena 2920 e 1 (1996) e Lotomania 2820 e 1 (1999):
+ * `descricaoFaixa` é sempre o texto "N acertos", inclusive "0 acertos".
+ *
+ * Dois detalhes são reproduzidos de propósito, porque são as armadilhas:
+ *
+ *  1. A FAIXA MÁXIMA ACUMULA em parte dos concursos — vem com
+ *     `numeroDeGanhadores: 0` e `valorPremio: 0.0`. Esse zero não é o valor
+ *     do prêmio, é "ninguém levou". Quem ler como valor faz a Retrospectiva
+ *     anunciar retorno zero justo onde o prêmio teria sido o maior.
+ *  2. As faixas fixas da Lotofácil (11, 12, 13) vêm com o valor de
+ *     regulamento, e as demais variam a cada concurso.
+ */
+export function rateioFalso(loteria, numero) {
+  const rnd = aleatorio(numero * 31 + loteria.length);
+  const acumulou = numero % 3 === 0;          // 1 em cada 3 concursos
+
+  const fixos = loteria === 'lotofacil' ? { 11: 7, 12: 14, 13: 35 } : {};
+
+  return FAIXAS[loteria].map((acertos, i) => {
+    const maxima = i === 0;
+    if (maxima && acumulou) {
+      return { descricaoFaixa: `${acertos} acertos`, faixa: i + 1,
+               numeroDeGanhadores: 0, valorPremio: 0.0 };
+    }
+    if (fixos[acertos] != null) {
+      return { descricaoFaixa: `${acertos} acertos`, faixa: i + 1,
+               numeroDeGanhadores: 1000 + numero, valorPremio: fixos[acertos] };
+    }
+    const valor = Math.round((maxima ? 500000 : 500) * (1 + rnd()) * 100) / 100;
+    return { descricaoFaixa: `${acertos} acertos`, faixa: i + 1,
+             numeroDeGanhadores: 1 + Math.floor(rnd() * 50), valorPremio: valor };
+  });
+}
+
+/** Uma resposta completa da Caixa para um concurso do histórico sintético. */
+export function respostaCaixaFalsa(loteria, numero) {
+  const dezenas = historicoFalso(loteria)[numero];
+  if (!dezenas) return null;
+  const m = MODALIDADES[loteria];
+  return {
+    numero,
+    listaDezenas: dezenas.map((d) => String(d).padStart(2, '0')),
+    dataApuracao: '01/03/2026',
+    listaRateioPremio: rateioFalso(loteria, numero),
+    tipoJogo: loteria.toUpperCase(),
+    numeroConcursoAnterior: numero - 1,
+    acumulado: numero % 3 === 0,
+    quantos: m.quantos,
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Navegador                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -125,7 +192,32 @@ export async function abrirPagina(navegador, opcoes = {}) {
   /* Diálogos de confirmação: o teste sempre aceita. */
   p.on('dialog', (d) => d.accept());
 
-  await p.route('**/servicebus2.caixa.gov.br/**', (r) => r.abort());
+  /* Por padrão a Caixa é recusada: a maioria dos testes não deve depender
+     dela, e o app cai no espelho. Com `opcoes.caixa`, ela responde — é o
+     que os testes de prêmio precisam, porque o rateio só existe ali. */
+  if (opcoes.caixa) {
+    p.pedidosCaixa = 0;
+    await p.route('**/servicebus2.caixa.gov.br/**', (r) => {
+      const url = new URL(r.request().url());
+      const partes = url.pathname.split('/').filter(Boolean);
+      const modalidade = partes[partes.length - (/^\d+$/.test(partes.at(-1)) ? 2 : 1)];
+      if (!MODALIDADES[modalidade]) return r.abort();
+
+      const ultimo = MODALIDADES[modalidade].quantos;
+      const numero = /^\d+$/.test(partes.at(-1)) ? Number(partes.at(-1)) : ultimo;
+      p.pedidosCaixa++;
+
+      const corpo = respostaCaixaFalsa(modalidade, numero);
+      if (!corpo) return r.fulfill({ status: 404, body: 'nao existe' });
+      return r.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(corpo),
+      });
+    });
+  } else {
+    await p.route('**/servicebus2.caixa.gov.br/**', (r) => r.abort());
+  }
   await p.route('**/loteria.json/**', (r) => {
     const nome = r.request().url().split('/').pop().replace('.json', '');
     if (!MODALIDADES[nome]) return r.abort();
@@ -178,6 +270,55 @@ export async function esperarPronto(p, limiteMs = 45000) {
     { timeout: limiteMs }
   );
   await p.waitForTimeout(300);
+}
+
+/**
+ * Espera a base de concursos encher.
+ *
+ * `esperarPronto` só garante que a TELA montou. Com a Caixa de mentira
+ * ligada, o app baixa concurso a concurso — centenas de requisições com
+ * pausa entre blocos —, e a tela fica pronta muito antes de a base estar
+ * completa. Sem esta espera, o teste lê um histórico vazio e falha por um
+ * motivo que não tem nada a ver com o que ele queria verificar.
+ */
+export async function esperarBase(p, loteria, minimo = 1, limiteMs = 90000) {
+  /* Laço aqui no Node, e não `waitForFunction`: a condição precisa de
+     `await import` e de uma leitura do IndexedDB, ou seja, é assíncrona —
+     e uma função assíncrona devolve uma Promise, que o waitForFunction lê
+     como valor VERDADEIRO na primeira tentativa. A espera passava na hora,
+     sem esperar nada. */
+  const fim = Date.now() + limiteMs;
+  for (;;) {
+    const quantos = await p.evaluate(async (lot) => {
+      const { DB } = await import('/js/db.js');
+      const h = await DB.lerHistorico(lot);
+      return Object.keys(h?.concursos ?? {}).length;
+    }, loteria);
+    if (quantos >= minimo) return quantos;
+    if (Date.now() > fim) {
+      throw new Error(`a base de ${loteria} parou em ${quantos}, esperava ${minimo}`);
+    }
+    await p.waitForTimeout(400);
+  }
+}
+
+/**
+ * Apaga os rateios guardados, mantendo os concursos.
+ *
+ * É como fica a base de quem já usava o sistema antes desta versão: os
+ * sorteios estão lá, os prêmios não. É esse o estado que o download em
+ * lote existe para consertar, então é nele que ele tem que ser testado —
+ * numa base recém-sincronizada não haveria nada para baixar, porque o
+ * rateio vem junto com o resultado.
+ */
+export async function esquecerRateios(p, loteria) {
+  return p.evaluate(async (lot) => {
+    const { DB } = await import('/js/db.js');
+    const h = await DB.lerHistorico(lot);
+    const { rateios, ...resto } = h;
+    await DB.salvarHistorico(lot, h.concursos, { ...resto, rateios: {} });
+    return Object.keys(h.concursos).length;
+  }, loteria);
 }
 
 /** Troca de aba pelo clique, como o usuário faz. */

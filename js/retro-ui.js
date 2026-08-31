@@ -312,31 +312,50 @@ function renderFinanceiro(r, l) {
       <div class="card"><div class="rotulo">Custo total</div>
         <div class="valor">${brl(f.custoTotal)}</div>
         <div class="rodape">${brl(f.custoPorConcurso)} × ${r.resumo.concursos} concursos</div></div>
-      <div class="card"><div class="rotulo">Retorno garantido</div>
-        <div class="valor">${brl(f.retornoFixo)}</div>
-        <div class="rodape">só faixas de valor fixo</div></div>
+      <div class="card"><div class="rotulo">Retorno apurado</div>
+        <div class="valor">${brl(f.retornoApurado)}</div>
+        <div class="rodape">o que a Caixa pagou de fato nesses concursos</div></div>
       <div class="card"><div class="rotulo">Retorno estimado</div>
         <div class="valor">${brl(f.retornoEstimado)}</div>
-        <div class="rodape">faixas de rateio, com os valores que você informou</div></div>
+        <div class="rodape">onde faltou o rateio, com os valores que você informou</div></div>
       <div class="card"><div class="rotulo">Saldo</div>
         <div class="valor ${f.saldo >= 0 ? 'positivo' : 'negativo'}">${brl(f.saldo)}</div>
         <div class="rodape">${f.roi.toFixed(1)}% sobre o investido</div></div>
     </div>
 
+    ${f.concursosSemRateio
+      ? `<p class="nota">
+          ${f.concursosSemRateio} dos ${r.resumo.concursos} concursos deste intervalo ainda
+          não têm o rateio da Caixa baixado — neles a conta usou a sua estimativa.
+          Em <b>Configurações → Prêmios pagos</b> dá para baixar o que falta.</p>`
+      : ''}
+
+    ${f.faixasAcumuladas
+      ? `<p class="nota" style="color:var(--alerta)">
+          Em ${f.faixasAcumuladas} ocasião(ões) estes jogos bateram uma faixa que
+          <b>acumulou</b> naquele concurso — ninguém levou. O prêmio real teria sido o
+          acumulado, que a Caixa não publica por bilhete, então essas ocasiões entraram
+          como zero. Ou seja: o retorno acima é um <b>piso</b>, e justamente nos
+          concursos em que o prêmio teria sido o maior.</p>`
+      : ''}
+
     ${faltam.length
       ? `<p class="nota" style="color:var(--alerta)">
-          As faixas de ${faltam.join(', ')} pontos estão sem valor informado, então o
-          retorno acima <b>ignora</b> o que elas teriam pago. Preencha uma estimativa
-          na caixa "Valores de prêmio" para completar a conta.</p>`
+          Estes jogos bateram ${f.ocorrenciasSemValor}× as faixas de ${faltam.join(', ')}
+          pontos em concursos <b>sem valor nenhum</b> — nem rateio baixado, nem estimativa.
+          Essas ocasiões entraram como zero. Baixe os prêmios pagos ou preencha uma
+          estimativa na caixa "Valores de prêmio".</p>`
       : ''}
 
     <div class="conclusao">
       <b>Como ler este saldo.</b> Ele responde "e se eu tivesse jogado exatamente
       estes jogos em todos esses concursos?". A resposta quase sempre é negativa, e
       não é defeito da estratégia: a Caixa devolve em prêmios menos do que arrecada,
-      por desenho. Um saldo positivo aqui normalmente vem de um único acerto grande
-      que você mesmo estimou — troque a estimativa e o saldo vira outro. As faixas
-      fixas são a única parte deste número em que dá para confiar de olhos fechados.
+      por desenho. Com o rateio baixado, a parte <b>apurada</b> deste número é o que a
+      Caixa realmente pagou em cada concurso — não é mais palpite. O que continua sendo
+      palpite é a parte estimada, e é lá que um saldo positivo costuma nascer: troque a
+      estimativa e ele vira outro. Concursos em que a faixa acumulou também puxam este
+      número para baixo, porque o acumulado não entra.
     </div>`;
 }
 
@@ -403,12 +422,12 @@ function renderDuelo(a, bB, l, rotulos) {
         ${linha('Maior seca', ra.maiorSeca, rb.maiorSeca, num, false,
                 'concursos seguidos sem prêmio nenhum')}
         <tr class="separador"><td colspan="3"></td></tr>
-        ${linha('Retorno garantido', fa.retornoFixo, fb.retornoFixo, brl)}
+        ${linha('Retorno apurado', fa.retornoApurado, fb.retornoApurado, brl)}
         ${linha('Retorno por R$ 100 gastos',
-                por100(fa.retornoFixo, fa.custoTotal),
-                por100(fb.retornoFixo, fb.custoTotal),
+                por100(fa.retornoApurado, fa.custoTotal),
+                por100(fb.retornoApurado, fb.custoTotal),
                 (x) => brl(x), true,
-                'só faixas de valor fixo — é a linha que compara de igual para igual')}
+                'só o que a Caixa pagou de fato — é a linha que compara de igual para igual')}
         ${linha('Saldo sobre o investido', fa.roi, fb.roi, pct)}
       </tbody>
     </table>
@@ -534,6 +553,9 @@ async function executarVarredura() {
   const concursos = janela > 0 ? historico.slice(-janela) : historico;
 
   const premios = premiosDe(l, ctx.premiosSalvos());
+  /* O rateio real de cada concurso. Onde ele existe, é ele que vale; a
+     tabela de estimativas acima só cobre o que ainda não foi baixado. */
+  const rateios = ctx.rateios?.() ?? {};
   const custoPorConcurso = jogos.reduce(
     (a, j) => a + custoAposta(l, j.length, ctx.precoDe(l)).custo,
     0
@@ -545,7 +567,7 @@ async function executarVarredura() {
   await ctx.esperarPintura();
 
   try {
-    const r = varrer(jogos, concursos, l, { premios, custoPorConcurso, topN: 25 });
+    const r = varrer(jogos, concursos, l, { premios, rateios, custoPorConcurso, topN: 25 });
 
     let base = null;
     if ($('#retroComparar').checked) {
@@ -553,6 +575,7 @@ async function executarVarredura() {
       await ctx.esperarPintura();
       base = compararComAleatorio(jogos, concursos, l, {
         premios,
+        rateios,
         custoPorConcurso,
         rodadas: 5,
       });
@@ -569,7 +592,7 @@ async function executarVarredura() {
         (acc, j) => acc + custoAposta(l, j.length, ctx.precoDe(l)).custo, 0
       );
       duelo = {
-        r: varrer(jogosB, concursos, l, { premios, custoPorConcurso: custoB, topN: 5 }),
+        r: varrer(jogosB, concursos, l, { premios, rateios, custoPorConcurso: custoB, topN: 5 }),
       };
     }
 

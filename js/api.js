@@ -105,6 +105,47 @@ function paraISO(dataBR) {
   return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
 }
 
+/**
+ * `listaRateioPremio` → `{ acertos: [valor, ganhadores] }`.
+ *
+ * O rótulo da faixa vem em `descricaoFaixa` como texto: "15 acertos",
+ * "6 acertos", "0 acertos". Conferido nos quatro extremos que o sistema
+ * cobre — Lotofácil 3774, Mega-Sena 2920 e 1 (1996), Lotomania 2820 e 1
+ * (1999): o formato é o mesmo desde sempre, inclusive o zero da Lotomania.
+ * O número de faixas NÃO é estável — a Lotomania de 1999 tinha 6, hoje tem
+ * 7 —, então aqui se lê o que veio, sem supor a lista completa.
+ *
+ * **O nº de ganhadores é guardado junto de propósito.** Quando a faixa
+ * acumula, a Caixa devolve `valorPremio: 0` com `numeroDeGanhadores: 0`, e
+ * esse zero NÃO quer dizer "esta faixa pagava zero" — quer dizer "ninguém
+ * levou". Um bilhete premiado ali teria levado o acumulado. Tratar os dois
+ * zeros como a mesma coisa transformaria o prêmio máximo em R$ 0,00 em toda
+ * a contabilidade: número errado com cara de certo, que é o defeito que
+ * este projeto mais persegue. Quem lê decide o que fazer; aqui só se
+ * registra o que a Caixa disse.
+ */
+function extrairRateio(bruto, loteria) {
+  const lista = bruto?.listaRateioPremio;
+  if (!Array.isArray(lista) || !lista.length) return null;
+
+  const faixas = new Set(loteria.faixas);
+  const out = {};
+  for (const item of lista) {
+    const m = String(item?.descricaoFaixa ?? '').match(/(\d+)\s*acerto/i);
+    if (!m) continue;
+    const acertos = Number(m[1]);
+    if (!faixas.has(acertos)) continue;      // faixa que esta modalidade não paga
+
+    const valor = Number(item.valorPremio);
+    const ganhadores = Number(item.numeroDeGanhadores);
+    out[acertos] = [
+      Number.isFinite(valor) ? valor : 0,
+      Number.isFinite(ganhadores) ? ganhadores : 0,
+    ];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /** Resposta crua da Caixa → o formato enxuto que o sistema usa. */
 function normalizarCaixa(bruto, loteria) {
   if (!bruto || typeof bruto !== 'object') return null;
@@ -121,7 +162,12 @@ function normalizarCaixa(bruto, loteria) {
   // gravar algo que vai bagunçar a estatística depois.
   if (dezenas.length !== loteria.sorteadas) return null;
 
-  return { numero, dezenas, data: paraISO(bruto.dataApuracao) };
+  return {
+    numero,
+    dezenas,
+    data: paraISO(bruto.dataApuracao),
+    rateio: extrairRateio(bruto, loteria),
+  };
 }
 
 /** Junta concursos novos ao que já está gravado, sem perder o antigo. */
@@ -129,10 +175,16 @@ async function gravarMesclado(loteriaId, novos, meta) {
   const atual = await DB.lerHistorico(loteriaId);
   const concursos = { ...(atual?.concursos ?? {}) };
   const datas = { ...(atual?.datas ?? {}) };
+  const rateios = { ...(atual?.rateios ?? {}) };
 
   for (const c of novos) {
     concursos[c.numero] = c.dezenas;
     if (c.data) datas[c.numero] = c.data;
+    // O rateio vem no MESMO pedido que trouxe as dezenas: para concurso
+    // novo ele sai de graça, sem nenhuma requisição a mais. O download em
+    // lote (baixarRateios) existe só para os concursos que já estavam na
+    // base antes desta versão.
+    if (c.rateio) rateios[c.numero] = c.rateio;
   }
 
   const numeros = Object.keys(concursos).map(Number);
@@ -140,6 +192,7 @@ async function gravarMesclado(loteriaId, novos, meta) {
 
   await DB.salvarHistorico(loteriaId, concursos, {
     datas,
+    rateios,
     ultimo,
     dataUltimo: datas[ultimo] ?? null,
     ...meta,
@@ -236,6 +289,141 @@ export async function sincronizarPelaCaixa(loteriaId, onProgresso = () => {}) {
     falhas,
     naoTentados: excedente,
     fonte: 'caixa',
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Rateio: quanto cada faixa pagou, concurso a concurso                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Quantos concursos por chamada de `baixarRateios`.
+ *
+ * Não é um limite da Caixa — é o tamanho do pedaço que a tela consegue
+ * mostrar andando. A cada lote a função volta, o app pinta o progresso e
+ * grava o que já veio; se o usuário fechar a aba no meio, o próximo lote
+ * recomeça de onde parou em vez de perder tudo. Com 300, um histórico de
+ * 3.774 concursos são 13 rodadas de uns 25 segundos.
+ */
+export const RATEIOS_POR_LOTE = 300;
+
+/**
+ * Quais concursos ainda não têm rateio guardado.
+ *
+ * "Não tem" é a ausência da chave. Um concurso já baixado em que TODAS as
+ * faixas acumularam fica gravado com zeros e ganhadores zero — e continua
+ * baixado. Se a ausência fosse deduzida do valor, esses concursos seriam
+ * rebaixados para sempre, a cada rodada, sem nunca sair da lista.
+ */
+export async function coberturaDeRateios(loteriaId) {
+  const reg = await DB.lerHistorico(loteriaId);
+  const concursos = reg?.concursos ?? {};
+  const rateios = reg?.rateios ?? {};
+
+  const numeros = Object.keys(concursos).map(Number).sort((a, b) => a - b);
+  const faltando = numeros.filter((n) => !rateios[n]);
+
+  return {
+    total: numeros.length,
+    comRateio: numeros.length - faltando.length,
+    faltando,
+  };
+}
+
+/**
+ * Baixa o rateio de UM LOTE de concursos e grava o que conseguiu.
+ *
+ * Por que em lotes, e não tudo de uma vez: são ~9.400 concursos somando as
+ * três modalidades, e a Caixa recusa rajada — a prova está no cabeçalho
+ * deste arquivo, 407 falhas em 527 pedidos. No ritmo seguro isso passa de
+ * dez minutos. Uma função que só volta no fim seria dez minutos de tela
+ * parada, sem progresso e sem nada gravado se algo interrompesse. Em lotes,
+ * cada rodada grava o seu pedaço e a seguinte continua dali.
+ *
+ * O ritmo (paralelismo 4, pausa de 90 ms, repescagem cada vez mais lenta) é
+ * o mesmo já calibrado para a sincronização — não há motivo para inventar
+ * outro, e ter dois ritmos diferentes só criaria uma segunda coisa para
+ * ajustar quando a Caixa mudar de humor.
+ *
+ * @param {string} loteriaId
+ * @param {object} [opcoes]
+ * @param {number} [opcoes.limite]      quantos concursos neste lote
+ * @param {(txt:string, feitos:number, doLote:number)=>void} [opcoes.onProgresso]
+ * @param {() => boolean} [opcoes.pedidoDeParar]  consultado entre blocos
+ * @returns {{baixados, gravados, falhas, restantes, total, comRateio, parou}}
+ */
+export async function baixarRateios(loteriaId, opcoes = {}) {
+  const loteria = LOTERIAS[loteriaId];
+  const modalidade = loteria.apiCaixa ?? loteria.id;
+  const base = await urlDoProxy();
+
+  const limite = opcoes.limite ?? RATEIOS_POR_LOTE;
+  const onProgresso = opcoes.onProgresso ?? (() => {});
+  const pedidoDeParar = opcoes.pedidoDeParar ?? (() => false);
+
+  const antes = await coberturaDeRateios(loteriaId);
+
+  /* Do mais recente para o mais antigo: são os concursos em que o usuário
+     tem bilhete, e os valores de 2026 valem mais para ele que os de 1996. */
+  const doLote = antes.faltando.slice(-limite).reverse();
+  if (!doLote.length) {
+    return { baixados: 0, gravados: 0, falhas: [], restantes: 0,
+             total: antes.total, comRateio: antes.comRateio, parou: false };
+  }
+
+  const colhidos = {};
+  let parou = false;
+
+  const buscarLista = async (lista, paralelo, pausa) => {
+    const falhas = [];
+    for (let i = 0; i < lista.length; i += paralelo) {
+      if (pedidoDeParar()) { parou = true; return falhas.concat(lista.slice(i)); }
+
+      const bloco = lista.slice(i, i + paralelo);
+      onProgresso(
+        `Baixando prêmios ${loteria.nome}: ${Object.keys(colhidos).length}/${doLote.length}…`,
+        Object.keys(colhidos).length,
+        doLote.length
+      );
+
+      const saidas = await Promise.allSettled(
+        bloco.map((n) => buscarJson(enderecoCaixa(base, modalidade, n), 20000))
+      );
+      saidas.forEach((sa, k) => {
+        const numero = bloco[k];
+        const r = sa.status === 'fulfilled' ? extrairRateio(sa.value, loteria) : null;
+        if (r) colhidos[numero] = r;
+        else falhas.push(numero);
+      });
+      if (pausa) await dormir(pausa);
+    }
+    return falhas;
+  };
+
+  let falhas = await buscarLista(doLote, PARALELISMO, PAUSA_ENTRE_BLOCOS);
+
+  for (let rodada = 1; rodada <= RODADAS_REPESCAGEM && falhas.length && !parou; rodada++) {
+    onProgresso(
+      `Refazendo ${falhas.length} concurso(s) que a Caixa recusou (tentativa ${rodada})…`,
+      Object.keys(colhidos).length, doLote.length
+    );
+    await dormir(400 * rodada);
+    falhas = await buscarLista(falhas, Math.max(1, 3 - rodada), 150 * rodada);
+  }
+
+  /* Grava o que veio ANTES de olhar o que faltou: se o usuário parar no meio
+     ou a rede cair na repescagem, o trabalho já feito fica. */
+  const gravados = await DB.mesclarRateios(loteriaId, colhidos);
+  const depois = await coberturaDeRateios(loteriaId);
+
+  return {
+    baixados: Object.keys(colhidos).length,
+    gravados,
+    falhas,
+    restantes: depois.faltando.length,
+    total: depois.total,
+    comRateio: depois.comRateio,
+    parou,
   };
 }
 
@@ -408,6 +596,7 @@ export async function carregarHistorico(loteriaId) {
 
   return {
     concursos,
+    rateios: reg.rateios ?? {},
     atualizadoEm: reg.atualizadoEm ?? null,
     origem: reg.origem,
     fonte: reg.fonte ?? null,

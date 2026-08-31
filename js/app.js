@@ -7,6 +7,7 @@ import { DB } from './db.js';
 import {
   sincronizar, importarArquivo, carregarHistorico,
   urlDoProxy, definirProxy, testarFonte, CAIXA,
+  baixarRateios, coberturaDeRateios,
 } from './api.js';
 import { analisar, sugerirFiltros } from './stats.js';
 import { gerar, filtrosPadrao, combinacoesSorteadas, pontuacaoPopularidade } from './generator.js';
@@ -36,6 +37,7 @@ import { iniciarResultados, atualizarResultados } from './resultados-ui.js';
 const estado = {
   loteriaId: 'lotofacil',
   historico: [],
+  rateios: {},   // {concurso: {acertos: [valor, ganhadores]}} — o que a Caixa pagou
   atualizadoEm: null,
   analise: null,
   janela: 0,
@@ -118,6 +120,25 @@ function esperarPintura() {
   });
 }
 
+/**
+ * De onde saiu o valor do prêmio — a coluna sozinha não conta essa história.
+ *
+ * Sem isto, R$ 1.784,10 preenchido pelo sistema e R$ 1.784,10 digitado à
+ * mão ficam idênticos na tela, e o usuário não tem como saber qual número
+ * ele ainda precisa conferir no comprovante.
+ */
+const FONTE_PREMIO = {
+  apurado: ['apurado', 'Rateio que a Caixa pagou nesta faixa, neste concurso'],
+  fixo: ['fixo', 'Valor garantido por regulamento'],
+  manual: ['seu', 'Você digitou este valor — a conferência não mexe nele'],
+};
+
+function seloDoPremio(bilhete) {
+  const f = FONTE_PREMIO[bilhete.premioFonte];
+  if (!f || !(bilhete.premio > 0)) return '';
+  return `<span class="selo fonte-premio" title="${f[1]}">${f[0]}</span>`;
+}
+
 function bolinhas(dezenas, destaque = new Set(), classe = 'acerto') {
   return dezenas
     .map((d) => `<span class="bolinha ${destaque.has(d) ? classe : ''}">${fmt(d, loteria())}</span>`)
@@ -172,6 +193,13 @@ $$('.aba').forEach((aba) => {
     aba.classList.add('ativa');
     $(`#${aba.dataset.alvo}`).classList.add('ativa');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    /* As tabelas de Configurações são retratos do banco, e eram desenhadas
+       uma única vez no arranque — antes de a sincronização terminar. Quem
+       abrisse a aba depois via "0 de 0 concursos" numa base cheia: a tela
+       afirmando algo que o banco desmentia. Refazer ao abrir custa duas
+       leituras e elimina a classe inteira desse defeito. */
+    if (aba.dataset.alvo === 'config') renderConfig();
   });
 });
 
@@ -202,7 +230,16 @@ function montarSeletorLoteria() {
     });
   });
 
-  document.documentElement.style.setProperty('--loteria', loteria().cor);
+  const l = loteria();
+  document.documentElement.style.setProperty('--loteria', l.cor);
+  /* A marca de "repetiu do concurso anterior" é amarela. Onde a cor da
+     modalidade é próxima do amarelo — a Lotomania é laranja — a borda
+     some em cima da célula marcada. Nesse caso entra um fio escuro por
+     dentro para separar as duas cores. `transparent` desenha nada, então
+     nas outras modalidades a regra do CSS é a mesma sem efeito nenhum. */
+  document.documentElement.style.setProperty(
+    '--separa-marca', l.marcaPrecisaSeparacao ? 'var(--fundo)' : 'transparent'
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -216,6 +253,7 @@ async function trocarLoteria() {
   const trocou = estado.trocouLoteria;
   const hist = await carregarHistorico(estado.loteriaId);
   estado.historico = hist.concursos;
+  estado.rateios = hist.rateios ?? {};
   estado.atualizadoEm = hist.atualizadoEm;
   estado.infoBase = hist;
   estado.diagnostico = diagnosticarBase(loteria(), hist);
@@ -1308,7 +1346,8 @@ async function renderBilhetes() {
           <td><span class="nota">${bi.origem ?? ''}${bi.rotulo ? `<br>${bi.rotulo}` : ''}</span></td>
           <td>${bi.acertos != null ? `<b>${bi.acertos}</b>${bi.premiado ? ' 🏆' : ''}` : '<span class="nota">—</span>'}</td>
           <td>${brl(bi.custo ?? 0)}</td>
-          <td><input type="number" step="0.01" class="premio-input" value="${bi.premio ?? 0}"></td>
+          <td><input type="number" step="0.01" class="premio-input" value="${bi.premio ?? 0}">
+            ${seloDoPremio(bi)}</td>
           <td><button class="btn fantasma perigo apagar" style="padding:.25rem .55rem">✕</button></td>
         </tr>`;
       }).join('')}
@@ -1351,7 +1390,13 @@ async function renderBilhetes() {
       const id = e.target.closest('tr').dataset.id;
       const alvo = todos.find((x) => x.id === id);
       if (!alvo) return;
-      alvo.premio = Number(e.target.value) || 0;
+      const digitado = Number(e.target.value) || 0;
+      alvo.premio = digitado;
+      /* Marcar como manual é o que impede a conferência seguinte de
+         sobrescrever este número com o rateio da Caixa. Voltar o campo a
+         zero desmarca: aí o usuário está dizendo "esquece o que eu pus",
+         e a conferência pode preencher de novo. */
+      alvo.premioFonte = digitado > 0 ? 'manual' : null;
       await DB.salvarBilhete(alvo);
       await renderBilhetes();
       await renderPainel();
@@ -1443,7 +1488,141 @@ function renderConfig() {
     $('#statusBases').innerHTML =
       `<div class="rolagem"><table><thead><tr><th>Loteria</th><th>Base</th><th>Último</th><th>Atualizada em</th></tr></thead><tbody>${linhas.join('')}</tbody></table></div>`;
   });
+
+  renderStatusRateios();
 }
+
+/* ------------------------------------------------------------------ */
+/* Prêmios pagos (rateio da Caixa, concurso a concurso)                */
+/* ------------------------------------------------------------------ */
+
+/* Fica fora de qualquer função para o botão "Parar" conseguir alcançar o
+   laço que já está rodando. Uma variável dentro do handler seria recriada
+   a cada clique e o Parar nunca chegaria em quem está no ar. */
+let pararRateios = false;
+
+async function renderStatusRateios() {
+  const linhas = await Promise.all(LISTA_LOTERIAS.map(async (l) => {
+    const c = await coberturaDeRateios(l.id);
+    const pct = c.total ? (c.comRateio / c.total) * 100 : 0;
+    const completo = c.total > 0 && c.faltando.length === 0;
+    return `<tr>
+      <td><b>${l.nome}</b></td>
+      <td>${c.comRateio.toLocaleString('pt-BR')} de ${c.total.toLocaleString('pt-BR')}</td>
+      <td>
+        <span class="barra-trilho" style="display:inline-block;width:110px;vertical-align:middle">
+          <span class="barra-valor-visual" style="display:block;height:100%;width:${pct.toFixed(1)}%;background:var(--loteria);border-radius:4px"></span>
+        </span>
+        ${completo ? '<span class="selo fixo">completo</span>' : `${pct.toFixed(0)}%`}
+      </td>
+    </tr>`;
+  }));
+
+  $('#statusRateios').innerHTML =
+    `<div class="rolagem"><table><thead><tr>
+       <th>Loteria</th><th>Concursos com prêmio</th><th>Cobertura</th>
+     </tr></thead><tbody>${linhas.join('')}</tbody></table></div>`;
+
+  /* Nada a baixar → botão desligado. Um botão que aceita o clique e não faz
+     nada visível é a mesma classe de defeito do "Salvo" que este projeto já
+     pagou caro: a tela aceitando uma ação que não existe. */
+  const faltamAoTodo = (await Promise.all(
+    LISTA_LOTERIAS.map(async (l) => (await coberturaDeRateios(l.id)).faltando.length)
+  )).reduce((s, n) => s + n, 0);
+
+  const btn = $('#btnBaixarRateios');
+  if (btn && !btn.dataset.rodando) {
+    btn.disabled = faltamAoTodo === 0;
+    btn.textContent = faltamAoTodo === 0
+      ? 'Tudo baixado'
+      : `Baixar prêmios que faltam (${faltamAoTodo.toLocaleString('pt-BR')})`;
+  }
+}
+
+$('#btnPararRateios').addEventListener('click', () => {
+  pararRateios = true;
+  $('#btnPararRateios').disabled = true;
+  $('#progressoRateios').textContent = 'Parando depois do bloco atual…';
+});
+
+$('#btnBaixarRateios').addEventListener('click', async () => {
+  const btn = $('#btnBaixarRateios');
+  const parar = $('#btnPararRateios');
+  const status = $('#progressoRateios');
+
+  pararRateios = false;
+  /* Marca que há um download no ar: sem isso, o `renderStatusRateios` que
+     roda a cada lote reescreveria o rótulo do botão por cima do "Baixando…"
+     e ainda poderia reabilitá-lo no meio da operação. */
+  btn.dataset.rodando = '1';
+  btn.disabled = true;
+  btn.textContent = 'Baixando…';
+  parar.hidden = false;
+  parar.disabled = false;
+
+  let totalBaixado = 0;
+  const problemas = [];
+
+  try {
+    for (const l of LISTA_LOTERIAS) {
+      /* Cada modalidade em quantos lotes forem precisos. O laço só termina
+         quando não sobrar nada OU quando um lote não conseguir baixar nada
+         — sem essa segunda saída, uma Caixa fora do ar viraria laço
+         infinito girando em falso. */
+      for (;;) {
+        if (pararRateios) break;
+
+        const r = await baixarRateios(l.id, {
+          onProgresso: (txt) => { status.textContent = txt; },
+          pedidoDeParar: () => pararRateios,
+        });
+
+        totalBaixado += r.baixados;
+        await renderStatusRateios();
+
+        if (r.restantes === 0) break;
+        if (r.baixados === 0) {
+          problemas.push(`${l.nome}: a Caixa recusou os ${r.falhas.length} pedidos do lote`);
+          break;
+        }
+        if (r.parou) break;
+
+        status.textContent =
+          `${l.nome}: faltam ${r.restantes.toLocaleString('pt-BR')} concursos…`;
+        await esperarPintura();
+      }
+      if (pararRateios) break;
+    }
+
+    /* A base em memória ficou velha: os bilhetes e a Retrospectiva precisam
+       enxergar os prêmios que acabaram de entrar. */
+    await trocarLoteria();
+    if (estado.historico.length) await conferirTodos(estado.loteriaId, estado.historico);
+    await renderBilhetes();
+    await renderPainel();
+
+    status.innerHTML = pararRateios
+      ? `Parado. ${totalBaixado.toLocaleString('pt-BR')} concurso(s) baixados —
+         clique de novo quando quiser continuar de onde parou.`
+      : problemas.length
+        ? `${totalBaixado.toLocaleString('pt-BR')} baixados, mas ${problemas.join('; ')}.
+           Tente de novo daqui a pouco: recusa da Caixa costuma ser temporária.`
+        : `Pronto: ${totalBaixado.toLocaleString('pt-BR')} concurso(s) com prêmio guardado.`;
+
+    toast(pararRateios ? 'Download interrompido.' : 'Prêmios atualizados.');
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--perigo)">Não deu certo:</span> ${semTags(e.message)}`;
+    toast(e.message, true);
+  } finally {
+    delete btn.dataset.rodando;
+    parar.hidden = true;
+    pararRateios = false;
+    /* Quem devolve rótulo e estado ao botão é o render — ele sabe quantos
+       ainda faltam. Escrever um texto fixo aqui recriaria o botão que
+       promete uma ação que já não existe. */
+    await renderStatusRateios();
+  }
+});
 
 $('#btnSalvarProxy').addEventListener('click', async () => {
   await definirProxy($('#fonteProxy').value.trim());
@@ -2097,6 +2276,7 @@ async function iniciar() {
     loteria,
     loteriaId: () => estado.loteriaId,
     historico: () => estado.historico,
+    rateios: () => estado.rateios,
     precoDe,
     premiosSalvos: () => estado.premios,
     salvarPremios: async (p) => {
