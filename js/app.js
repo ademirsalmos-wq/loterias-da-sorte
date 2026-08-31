@@ -1561,16 +1561,16 @@ $('#btnBaixarRateios').addEventListener('click', async () => {
   parar.disabled = false;
 
   let totalBaixado = 0;
-  const problemas = [];
+  let bloqueado = false;
 
   try {
     for (const l of LISTA_LOTERIAS) {
-      /* Cada modalidade em quantos lotes forem precisos. O laço só termina
-         quando não sobrar nada OU quando um lote não conseguir baixar nada
-         — sem essa segunda saída, uma Caixa fora do ar viraria laço
-         infinito girando em falso. */
+      /* Cada modalidade em quantos lotes forem precisos. O laço termina
+         quando não sobrar nada, quando a Caixa fechar a porta, ou quando um
+         lote não trouxer nada — sem essa última saída, uma Caixa fora do ar
+         viraria laço infinito girando em falso. */
       for (;;) {
-        if (pararRateios) break;
+        if (pararRateios || bloqueado) break;
 
         const r = await baixarRateios(l.id, {
           onProgresso: (txt) => { status.textContent = txt; },
@@ -1580,18 +1580,17 @@ $('#btnBaixarRateios').addEventListener('click', async () => {
         totalBaixado += r.baixados;
         await renderStatusRateios();
 
-        if (r.restantes === 0) break;
-        if (r.baixados === 0) {
-          problemas.push(`${l.nome}: a Caixa recusou os ${r.falhas.length} pedidos do lote`);
-          break;
-        }
-        if (r.parou) break;
+        /* Bloqueio de IP não se resolve insistindo: cada pedido a mais
+           renova a contagem do WAF e adia a liberação. Para tudo, inclusive
+           as outras modalidades — a porta é a mesma para todas. */
+        if (r.bloqueado) { bloqueado = true; break; }
+        if (r.restantes === 0 || r.baixados === 0 || r.parou) break;
 
         status.textContent =
-          `${l.nome}: faltam ${r.restantes.toLocaleString('pt-BR')} concursos…`;
+          `${l.nome}: faltam ${r.restantes.toLocaleString('pt-BR')} concursos. Continuando…`;
         await esperarPintura();
       }
-      if (pararRateios) break;
+      if (pararRateios || bloqueado) break;
     }
 
     /* A base em memória ficou velha: os bilhetes e a Retrospectiva precisam
@@ -1601,15 +1600,24 @@ $('#btnBaixarRateios').addEventListener('click', async () => {
     await renderBilhetes();
     await renderPainel();
 
-    status.innerHTML = pararRateios
-      ? `Parado. ${totalBaixado.toLocaleString('pt-BR')} concurso(s) baixados —
-         clique de novo quando quiser continuar de onde parou.`
-      : problemas.length
-        ? `${totalBaixado.toLocaleString('pt-BR')} baixados, mas ${problemas.join('; ')}.
-           Tente de novo daqui a pouco: recusa da Caixa costuma ser temporária.`
+    status.innerHTML = bloqueado
+      ? `<span style="color:var(--alerta)">A Caixa parou de responder ao seu acesso.</span>
+         Os <b>${totalBaixado.toLocaleString('pt-BR')}</b> concursos desta rodada estão
+         guardados. Ela limita quantos pedidos um mesmo acesso pode fazer por vez, e o
+         bloqueio é <b>temporário e curto</b> — na vez em que isso foi medido, saiu em
+         cerca de 5 minutos. Espere um pouco e clique de novo para continuar de onde
+         parou. Insistir agora só renova a contagem e adia a liberação.`
+      : pararRateios
+        ? `Parado. ${totalBaixado.toLocaleString('pt-BR')} concurso(s) baixados —
+           clique de novo quando quiser continuar de onde parou.`
         : `Pronto: ${totalBaixado.toLocaleString('pt-BR')} concurso(s) com prêmio guardado.`;
 
-    toast(pararRateios ? 'Download interrompido.' : 'Prêmios atualizados.');
+    toast(
+      bloqueado ? 'A Caixa bloqueou temporariamente — tente daqui a pouco.'
+        : pararRateios ? 'Download interrompido.'
+        : 'Prêmios atualizados.',
+      bloqueado
+    );
   } catch (e) {
     status.innerHTML = `<span style="color:var(--perigo)">Não deu certo:</span> ${semTags(e.message)}`;
     toast(e.message, true);

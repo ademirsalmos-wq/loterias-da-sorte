@@ -409,6 +409,39 @@ export default async function rodar() {
   t.confere('a tela conta o que aconteceu',
     /pronto/i.test(depoisDoClique.progresso), depoisDoClique.progresso);
 
+  /* ---------------- a parede do 403 --------------------------------- */
+
+  /* Aconteceu em produção: o download da Lotofácil inteira completou, a
+     Mega-Sena começou, e por volta do 879º concurso a Caixa passou a
+     responder 403 para o IP do usuário — bloqueio por volume, num IP
+     brasileiro que funcionava minutos antes. O download continuou batendo
+     na porta fechada por vários minutos com a tela parada em "0/300", que
+     o usuário leu como travamento. Com razão: nada mudava na tela.
+
+     Duas coisas precisam valer daqui em diante: desistir rápido, e dizer
+     o que aconteceu. */
+
+  await esquecerRateios(p, 'lotofacil');
+  await p.route('**/servicebus2.caixa.gov.br/**', (r) =>
+    r.fulfill({ status: 403, contentType: 'text/html', body: 'Forbidden' })
+  );
+
+  const t0 = Date.now();
+  const parede = await p.evaluate(async () => {
+    const { baixarRateios } = await import('/js/api.js');
+    return baixarRateios('lotofacil', { limite: 300 });
+  });
+  const segundos = (Date.now() - t0) / 1000;
+
+  t.confere('403 é reconhecido como bloqueio, não como azar',
+    parede.bloqueado === true, JSON.stringify({ bloqueado: parede.bloqueado }));
+  t.confere('desiste em segundos, não fica minutos batendo na porta fechada',
+    segundos < 20, `levou ${segundos.toFixed(1)}s`);
+  t.confere('não dispara os 300 pedidos do lote quando a porta está fechada',
+    parede.recusados <= 12, `${parede.recusados} pedidos recusados antes de desistir`);
+  t.confere('nada se perde: o que já estava guardado continua lá',
+    parede.baixados === 0 && parede.comRateio === 0);
+
   t.confere('nenhum erro de página', p.erros.length === 0, p.erros.join(' | '));
   await nav.close();
   return t.resultado();

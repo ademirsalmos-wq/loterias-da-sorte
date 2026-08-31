@@ -86,12 +86,22 @@ async function buscarJson(url, timeoutMs = 20000) {
     const r = await fetch(url, { signal: ctrl.signal });
     if (!r.ok) {
       if (r.status === 403) {
-        throw new Error(
-          'A Caixa recusou a conexão (403). Ela só aceita acessos com IP do ' +
-            'Brasil — verifique se há VPN ou proxy ativo.'
+        /* 403 aqui tem DUAS causas, e a mensagem precisa dizer as duas:
+           acesso de fora do Brasil (geobloqueio) ou pedidos demais em pouco
+           tempo (o WAF da Caixa bane o IP por um tempo). Já aconteceu de
+           verdade: um download em massa levou 403 num IP brasileiro que
+           funcionava perfeitamente minutos antes. */
+        const e = new Error(
+          'A Caixa recusou a conexão (403). Ou é excesso de pedidos em pouco ' +
+            'tempo — o bloqueio é temporário, espere alguns minutos —, ou o ' +
+            'acesso não está saindo de um IP do Brasil (VPN ou proxy ativo).'
         );
+        e.status = 403;
+        throw e;
       }
-      throw new Error(`HTTP ${r.status}`);
+      const e = new Error(`HTTP ${r.status}`);
+      e.status = r.status;
+      throw e;
     }
     return await r.json();
   } finally {
@@ -308,6 +318,39 @@ export async function sincronizarPelaCaixa(loteriaId, onProgresso = () => {}) {
 export const RATEIOS_POR_LOTE = 300;
 
 /**
+ * Ritmo PRÓPRIO do download em massa — bem mais lento que o da sincronização.
+ *
+ * Aprendido do jeito caro, em produção: o download da Lotofácil inteira
+ * (3.775 concursos) rodou no ritmo da sincronização — 4 em paralelo, 90 ms
+ * entre blocos, uns 13 pedidos por segundo — e completou. Aí a Mega-Sena
+ * começou e, por volta do 879º, a Caixa passou a responder **403 para o IP**
+ * do usuário. Não era geobloqueio: era o WAF (Azion) banindo por volume,
+ * num IP brasileiro que funcionava minutos antes. O bloqueio derruba o app
+ * inteiro, não só o download.
+ *
+ * A diferença entre os dois casos é a natureza da tarefa. Sincronizar é
+ * interativo: o usuário está olhando e são dezenas de concursos. Este
+ * download é tarefa de fundo de milhares de pedidos, feita uma vez na vida
+ * — não há por que correr. A 4 por segundo, as três modalidades levam ~40
+ * minutos e não acordam o WAF; a 13 por segundo levariam 12 e derrubam o
+ * acesso do usuário por um tempo indeterminado.
+ */
+const RATEIO_PARALELISMO = 2;
+const RATEIO_PAUSA = 400;        // ms entre blocos
+const RATEIO_PAUSA_ENTRE_LOTES = 1500;
+
+/**
+ * Quantos blocos seguidos podem falhar inteiros antes de desistir do lote.
+ *
+ * Quando a Caixa bane o IP, TODO pedido passa a falhar — e sem esta guarda o
+ * download continuava disparando os 300 do lote mais três repescagens, uns
+ * seis minutos batendo numa porta fechada, com a tela parada em "0/300". O
+ * usuário lê isso como travamento, e com razão: nada do que ele via mudava.
+ * Três blocos sem NENHUM sucesso é sinal claro de parede, não de azar.
+ */
+const BLOCOS_VAZIOS_ATE_DESISTIR = 3;
+
+/**
  * Quais concursos ainda não têm rateio guardado.
  *
  * "Não tem" é a ausência da chave. Um concurso já baixado em que TODAS as
@@ -373,15 +416,25 @@ export async function baixarRateios(loteriaId, opcoes = {}) {
 
   const colhidos = {};
   let parou = false;
+  let bloqueado = false;      // a Caixa fechou a porta para este IP
+  let recusados = 0;
 
   const buscarLista = async (lista, paralelo, pausa) => {
     const falhas = [];
+    let blocosVazios = 0;
+
     for (let i = 0; i < lista.length; i += paralelo) {
       if (pedidoDeParar()) { parou = true; return falhas.concat(lista.slice(i)); }
+      if (bloqueado) return falhas.concat(lista.slice(i));
 
       const bloco = lista.slice(i, i + paralelo);
+      /* O progresso mostra TAMBÉM os recusados. Sem isso a linha ficava em
+         "0/300" enquanto centenas de pedidos eram negados, e a tela parecia
+         congelada — a tela precisa contar o que está acontecendo, inclusive
+         quando o que está acontecendo é fracasso. */
       onProgresso(
-        `Baixando prêmios ${loteria.nome}: ${Object.keys(colhidos).length}/${doLote.length}…`,
+        `Baixando prêmios ${loteria.nome}: ${Object.keys(colhidos).length}/${doLote.length}` +
+          (recusados ? ` · ${recusados} recusados` : '') + '…',
         Object.keys(colhidos).length,
         doLote.length
       );
@@ -389,26 +442,50 @@ export async function baixarRateios(loteriaId, opcoes = {}) {
       const saidas = await Promise.allSettled(
         bloco.map((n) => buscarJson(enderecoCaixa(base, modalidade, n), 20000))
       );
+
+      let veio = 0;
       saidas.forEach((sa, k) => {
         const numero = bloco[k];
-        const r = sa.status === 'fulfilled' ? extrairRateio(sa.value, loteria) : null;
-        if (r) colhidos[numero] = r;
+        if (sa.status === 'rejected') {
+          if (sa.reason?.status === 403) bloqueado = true;
+          recusados++;
+          falhas.push(numero);
+          return;
+        }
+        const r = extrairRateio(sa.value, loteria);
+        if (r) { colhidos[numero] = r; veio++; }
         else falhas.push(numero);
       });
+
+      /* Uma parede não se atravessa insistindo. */
+      if (veio === 0) {
+        if (++blocosVazios >= BLOCOS_VAZIOS_ATE_DESISTIR) {
+          bloqueado = true;
+          return falhas.concat(lista.slice(i + paralelo));
+        }
+      } else {
+        blocosVazios = 0;
+      }
+
       if (pausa) await dormir(pausa);
     }
     return falhas;
   };
 
-  let falhas = await buscarLista(doLote, PARALELISMO, PAUSA_ENTRE_BLOCOS);
+  let falhas = await buscarLista(doLote, RATEIO_PARALELISMO, RATEIO_PAUSA);
 
-  for (let rodada = 1; rodada <= RODADAS_REPESCAGEM && falhas.length && !parou; rodada++) {
+  /* Repescagem só faz sentido para recusa esporádica. Com o IP bloqueado ela
+     vira mais mil pedidos numa porta fechada — e cada um deles ADIA a hora em
+     que o bloqueio sai. */
+  for (let rodada = 1;
+       rodada <= RODADAS_REPESCAGEM && falhas.length && !parou && !bloqueado;
+       rodada++) {
     onProgresso(
       `Refazendo ${falhas.length} concurso(s) que a Caixa recusou (tentativa ${rodada})…`,
       Object.keys(colhidos).length, doLote.length
     );
-    await dormir(400 * rodada);
-    falhas = await buscarLista(falhas, Math.max(1, 3 - rodada), 150 * rodada);
+    await dormir(600 * rodada);
+    falhas = await buscarLista(falhas, 1, 300 * rodada);
   }
 
   /* Grava o que veio ANTES de olhar o que faltou: se o usuário parar no meio
@@ -416,14 +493,23 @@ export async function baixarRateios(loteriaId, opcoes = {}) {
   const gravados = await DB.mesclarRateios(loteriaId, colhidos);
   const depois = await coberturaDeRateios(loteriaId);
 
+  /* Respiro entre lotes. O WAF da Caixa olha volume numa janela de tempo, e
+     lotes emendados sem pausa somam como se fossem um só — que foi
+     exatamente como o IP do usuário acabou bloqueado. */
+  if (depois.faltando.length && !parou && !bloqueado) {
+    await dormir(RATEIO_PAUSA_ENTRE_LOTES);
+  }
+
   return {
     baixados: Object.keys(colhidos).length,
     gravados,
     falhas,
+    recusados,
     restantes: depois.faltando.length,
     total: depois.total,
     comRateio: depois.comRateio,
     parou,
+    bloqueado,
   };
 }
 

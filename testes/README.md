@@ -12,6 +12,11 @@ O runner sobe um servidor estático próprio na porta 8123, abre um Chromium
 sem janela, roda tudo e sai com código 1 se algo falhar. Não precisa de
 internet, não toca no Firebase de verdade e não usa a API da Caixa.
 
+Leva uns 5 minutos. A maior parte é o `premios.teste.mjs`, que roda o
+download em massa no ritmo REAL — de propósito lento, porque foi correndo
+demais que a Caixa bloqueou o IP de um usuário em produção. Testar num ritmo
+que a produção não usa não testaria nada.
+
 ---
 
 ## Por que estes testes existem assim
@@ -71,7 +76,7 @@ recusa acesso a dados de outro `uid`.
 ## Ao mexer no código
 
 Rode antes de publicar. Cada deploy custa crédito do Netlify, e a suíte
-inteira leva menos de dois minutos — sai muito mais barato descobrir aqui.
+inteira leva uns 5 minutos — sai muito mais barato descobrir aqui.
 
 Se você **corrigir um bug**, escreva a verificação que teria pego. Quase
 toda linha destes arquivos nasceu de um defeito real que passou por
