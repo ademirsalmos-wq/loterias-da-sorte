@@ -11,6 +11,7 @@ import {
 } from './api.js';
 import { analisar, sugerirFiltros } from './stats.js';
 import { gerar, filtrosPadrao, combinacoesSorteadas, pontuacaoPopularidade } from './generator.js';
+import { viabilidade } from './espaco.js';
 import {
   fechar, minimoTeorico, binomial, probabilidadeCenario, umEmQuantos,
 } from './wheel.js';
@@ -691,6 +692,9 @@ function montarVolanteGerador() {
   const fixas = [...estado.volanteGerador].filter(([, v]) => v === 'fixa').length;
   const excl = [...estado.volanteGerador].filter(([, v]) => v === 'excluida').length;
   $('#resumoVolante').textContent = `${fixas} fixa(s), ${excl} excluída(s)`;
+  /* Fixar ou excluir muda o tamanho do espaço a percorrer, então o número
+     mostrado ao lado de "Medir este filtro" tem que acompanhar o volante. */
+  atualizarNotaEspaco();
 }
 
 function montarVolanteFechamento() {
@@ -750,6 +754,7 @@ function montarOpcoesGerador() {
 
   atualizarCustoPorJogo();
   aplicarSugestoesNosFiltros(false);
+  atualizarNotaEspaco();
   estado.trocouLoteria = false;
 }
 
@@ -764,6 +769,7 @@ function atualizarCustoPorJogo() {
 $('#dezenasPorJogo').addEventListener('change', () => {
   atualizarCustoPorJogo();
   aplicarSugestoesNosFiltros(false);
+  atualizarNotaEspaco();
 });
 $('#qtdJogos').addEventListener('input', atualizarCustoPorJogo);
 
@@ -920,6 +926,241 @@ $('#btnGerar').addEventListener('click', async () => {
     btn.disabled = false; btn.textContent = 'Gerar bilhetes';
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* Medição do espaço filtrado                                          */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Isto aqui responde a pergunta que o Gerador levanta e não respondia:
+ * "se eu apertar os filtros até sobrarem poucos bilhetes, eles acertam
+ * mais?". A resposta é não, e é teorema — mas ver o próprio filtro cortar
+ * 95% do espaço sem mexer na coluna de acertos convence de um jeito que
+ * nenhum texto convence.
+ *
+ * O trabalho pesado mora num Worker (js/espaco-worker.js). A explicação de
+ * por que Worker e não `esperarPintura()` está lá.
+ */
+
+let workerEspaco = null;
+
+function encerrarWorkerEspaco() {
+  if (workerEspaco) { workerEspaco.terminate(); workerEspaco = null; }
+  $('#botoesEspaco').hidden = true;
+  const btn = $('#btnMedirFiltro');
+  btn.disabled = false;
+  btn.textContent = 'Medir este filtro';
+}
+
+/**
+ * O tamanho do espaço aparece ANTES de o usuário apertar qualquer botão.
+ * A lição do download de prêmios foi essa: número que só aparece depois de
+ * dois minutos de barra de progresso chega tarde demais para ajudar na
+ * decisão de começar.
+ */
+function atualizarNotaEspaco() {
+  const nota = $('#notaEspaco');
+  const btn = $('#btnMedirFiltro');
+  if (!nota || !btn) return;
+
+  /* Pode ser chamada antes de o select de dezenas existir (no arranque, ou
+     ao trocar de modalidade). Sem tamanho não há espaço a calcular. */
+  if (!$('#dezenasPorJogo').value) { nota.textContent = ''; btn.disabled = true; return; }
+
+  const l = loteria();
+  let filtros;
+  try { filtros = lerFiltrosDaTela(); }
+  catch { nota.textContent = ''; btn.disabled = true; return; }
+
+  const via = viabilidade(l, filtros);
+  if (!via.viavel) {
+    nota.innerHTML = `<span style="color:var(--alerta)">${via.motivo}</span>`;
+    btn.disabled = true;
+    return;
+  }
+  btn.disabled = false;
+  nota.innerHTML =
+    `“Medir este filtro” percorre as <b>${via.bruto.toLocaleString('pt-BR')}</b> combinações ` +
+    `de ${via.tamanho} dezenas e mostra quantas sobram — e se sobrar diferença de ` +
+    `desempenho, se ela é sinal ou ruído.` +
+    /* O usuário merece saber de onde vem a espera antes de achar que o
+       aparelho dele é lento. Medido: a Lotofácil sai de 0,4s para 4,5s. */
+    (filtros.evitarPopulares
+      ? ` <span class="sub">Com “evitar padrões muito jogados” ligado a conta é bem mais
+          lenta — essa pontuação precisa olhar cada jogo inteiro, um por um.</span>`
+      : '');
+}
+
+$('#espacoPeriodo').addEventListener('change', atualizarNotaEspaco);
+$('#evitarPopulares').addEventListener('change', atualizarNotaEspaco);
+$('#btnCancelarEspaco').addEventListener('click', () => {
+  encerrarWorkerEspaco();
+  $('#progressoEspaco').textContent = 'Cancelado.';
+});
+
+$('#btnMedirFiltro').addEventListener('click', () => {
+  const l = loteria();
+  if (!estado.historico.length) return toast('Baixe os resultados primeiro.', true);
+
+  let filtros;
+  try { filtros = lerFiltrosDaTela(); }
+  catch (e) { return toast(e.message, true); }
+
+  const via = viabilidade(l, filtros);
+  if (!via.viavel) return toast(via.motivo, true);
+
+  const janela = Number($('#espacoPeriodo').value);
+  const concursos = janela > 0 ? estado.historico.slice(-janela) : estado.historico;
+
+  /* A tabela do usuário guarda {acertos:{valor,fixo}}; o módulo quer só o
+     número, e só como último recurso — rateio apurado sempre vence. */
+  const estimados = {};
+  for (const [k, v] of Object.entries(estado.premios ?? {})) estimados[k] = v?.valor ?? v ?? 0;
+
+  encerrarWorkerEspaco();
+  const caixa = $('#caixaMedicaoEspaco');
+  caixa.hidden = false;
+  $('#corpoEspaco').hidden = true;
+  $('#botoesEspaco').hidden = false;
+  $('#progressoEspaco').textContent = 'Preparando…';
+  const btn = $('#btnMedirFiltro');
+  btn.disabled = true;
+  btn.textContent = 'Medindo…';
+  caixa.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  workerEspaco = new Worker(new URL('./espaco-worker.js', import.meta.url), { type: 'module' });
+
+  workerEspaco.onerror = (e) => {
+    encerrarWorkerEspaco();
+    $('#progressoEspaco').textContent = `Falhou ao iniciar a medição: ${e.message ?? 'erro no Worker'}`;
+  };
+
+  workerEspaco.onmessage = (ev) => {
+    const m = ev.data ?? {};
+    const p = $('#progressoEspaco');
+
+    if (m.tipo === 'fase') {
+      p.textContent = m.fase === 'enumerando'
+        ? `Percorrendo ${m.bruto.toLocaleString('pt-BR')} combinações…`
+        : `Passando ${m.bilhetes.toLocaleString('pt-BR')} bilhetes por ${concursos.length.toLocaleString('pt-BR')} concursos…`;
+      return;
+    }
+
+    if (m.tipo === 'progresso') {
+      /* A barra conta o que foi VISITADO, não só o que passou. Progresso
+         que só soma sucesso é indistinguível de travamento — foi assim que
+         o download de prêmios pareceu travado enquanto funcionava. */
+      const pct = m.total ? Math.min(100, (m.feito / m.total) * 100) : 0;
+      p.textContent = m.fase === 'enumerando'
+        ? `Percorrendo… ${m.feito.toLocaleString('pt-BR')} combinações visitadas, ${m.total.toLocaleString('pt-BR')} aprovadas até agora.`
+        : `Medindo… ${pct.toFixed(0)}% dos concursos.`;
+      return;
+    }
+
+    if (m.tipo === 'vazio') {
+      encerrarWorkerEspaco();
+      p.innerHTML =
+        `<b>Nenhuma combinação passa nestes filtros.</b> Percorri as ` +
+        `${m.bruto.toLocaleString('pt-BR')} possíveis em ${(m.ms / 1000).toFixed(1)}s e ` +
+        `nenhuma sobrou. Afrouxe alguma faixa.`;
+      return;
+    }
+
+    if (m.tipo === 'erro') {
+      encerrarWorkerEspaco();
+      p.innerHTML = `<span style="color:var(--perigo)">${m.mensagem}</span>`;
+      return;
+    }
+
+    if (m.tipo === 'pronto') {
+      encerrarWorkerEspaco();
+      p.textContent = '';
+      desenharMedicaoEspaco(m, l, filtros, concursos);
+    }
+  };
+
+  workerEspaco.postMessage({
+    tipo: 'medir',
+    loteriaId: estado.loteriaId,
+    filtros,
+    concursos: concursos.map((c) => ({ numero: c.numero, dezenas: c.dezenas })),
+    rateios: estado.rateios ?? {},
+    estimados,
+    ultimoSorteio: estado.historico[estado.historico.length - 1]?.dezenas ?? null,
+  });
+});
+
+function desenharMedicaoEspaco(m, l, filtros, concursos) {
+  const { espaco, medicao, ic, veredito: v } = m;
+  const pct = (x, casas = 3) => `${(x * 100).toFixed(casas).replace('.', ',')}%`;
+  const num = (x) => x.toLocaleString('pt-BR');
+
+  $('#vereditoEspaco').innerHTML = v.dentroDoRuido
+    ? `<div class="veredito-ok"><b>Nenhum efeito detectável.</b> ${v.premio}</div>`
+    : `<div class="aviso-honesto"><em>Diferença fora do ruído — e isso pede desconfiança, não festa.</em> ${v.premio}</div>`;
+
+  const custoBilhete = custoAposta(l, espaco.tamanho, precoDe(l)).custo;
+  const por100 = (retorno) => (custoBilhete ? (retorno / custoBilhete) * 100 : 0);
+
+  $('#resumoEspaco').innerHTML =
+    `Medido sobre <b>${num(medicao.concursos)} concursos</b> (nº ${num(medicao.primeiro)} ao ` +
+    `${num(medicao.ultimo)}). ` +
+    (espaco.exata
+      ? `A medição usou <b>o espaço inteiro</b>: todas as ${num(espaco.total)} combinações aprovadas.`
+      : `O espaço tem ${num(espaco.total)} combinações — grande demais para medir uma a uma, ` +
+        `então a medição usou uma <b>amostra uniforme de ${num(espaco.amostrados)}</b> delas ` +
+        `(sorteio por reservatório, não “as primeiras”).`) +
+    ` Enumeração em ${(espaco.ms / 1000).toFixed(1)}s.` +
+    (medicao.concursosSemRateio
+      ? ` <span style="color:var(--alerta)">${num(medicao.concursosSemRateio)} concursos ainda ` +
+        `sem rateio baixado — nesses o dinheiro saiu da sua tabela de estimativas.</span>`
+      : '');
+
+  const linha = (rotulo, a, b) => `<tr><td>${rotulo}</td><td>${a}</td><td>${b}</td></tr>`;
+  const sep = `<tr class="separador"><td colspan="3"></td></tr>`;
+
+  const faixas = (l.faixas ?? []).slice().sort((a, b) => b - a);
+  const dist = new Map(medicao.distribuicao.map((d) => [d.acertos, d]));
+
+  $('#tabelaEspaco').innerHTML = `
+    <thead>
+      <tr>
+        <th>Medida</th>
+        <th>Filtrado</th>
+        <th>Bilhete qualquer</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${linha('Combinações',
+        `${num(espaco.total)} <span class="sub">(${pct(espaco.fracao, 2)})</span>`,
+        num(espaco.bruto))}
+      ${linha('Custo de jogar todas', brl(espaco.total * custoBilhete), brl(espaco.bruto * custoBilhete))}
+      ${sep}
+      ${linha('<b>Média de acertos</b>',
+        `<b>${medicao.filtrado.mediaAcertos.toFixed(4).replace('.', ',')}</b>`,
+        `<b>${medicao.teorico.mediaAcertos.toFixed(4).replace('.', ',')}</b>`)}
+      ${faixas.map((f) => {
+        const d = dist.get(f);
+        return linha(`${f} acertos`, pct(d?.pct ?? 0, 4), pct(d?.teorico ?? 0, 4));
+      }).join('')}
+      ${linha('Premiados (qualquer faixa)',
+        pct(medicao.filtrado.pctPremiado, 3), pct(medicao.teorico.pctPremiado, 3))}
+      ${sep}
+      ${linha('Retorno por R$ 100',
+        brl(por100(medicao.filtrado.retornoPorBilhete)),
+        brl(por100(medicao.teorico.retornoPorBilhete)))}
+    </tbody>`;
+
+  $('#conclusaoEspaco').innerHTML =
+    `${v.acertos}<br><br>${v.dinheiro}` +
+    (v.ressalva ? `<br><br><span style="color:var(--alerta)">${v.ressalva}</span>` : '') +
+    (filtros.sobreposicaoMax != null
+      ? `<br><br><span class="sub">O filtro de espalhamento foi ignorado aqui: ele é uma
+         regra entre bilhetes do seu lote, e não faz sentido aplicada a um espaço inteiro.</span>`
+      : '');
+
+  $('#corpoEspaco').hidden = false;
+}
 
 $('#btnSalvarGerados').addEventListener('click', async () => {
   if (!estado.jogosGerados.length) return;

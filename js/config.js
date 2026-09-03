@@ -73,6 +73,8 @@ export const LOTERIAS = {
     // Fechamentos viáveis: C(22,15) = 170.544 cenários no pior caso
     fechamentoDisponivel: true,
     fechamentoMaxDezenas: 22,
+    // Espaço enumerável: C(25,15) = 3.268.760 combinações, ~150 ms medidos.
+    espacoDisponivel: true,
     padding: 2,
   },
 
@@ -102,6 +104,8 @@ export const LOTERIAS = {
     // completa roda em menos de um segundo.
     fechamentoDisponivel: true,
     fechamentoMaxDezenas: 24,
+    // C(60,6) = 50.063.860 — pesado mas enumerável: ~1,5 s medidos com poda.
+    espacoDisponivel: true,
     padding: 2,
   },
 
@@ -142,6 +146,11 @@ export const LOTERIAS = {
     // C(100,50) é astronômico — fechamento com garantia não é viável aqui.
     fechamentoDisponivel: false,
     fechamentoMaxDezenas: 0,
+    /* Nem enumeração do espaço. C(100,50) = 1,0 × 10²⁹ combinações: a um
+       bilhão por segundo levaria 3 trilhões de anos. Não é limite deste
+       código, é limite da aritmética — e o universo de 100 dezenas também
+       não caberia nas máscaras de 64 bits que a enumeração usa. */
+    espacoDisponivel: false,
     padding: 2,
   },
 };

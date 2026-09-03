@@ -336,7 +336,46 @@
       <div class="botoes">
         <button class="btn primario" id="btnGerar">Gerar bilhetes</button>
         <button class="btn fantasma" id="btnSugerirFiltros">Usar sugestão do histórico</button>
+        <button class="btn fantasma" id="btnMedirFiltro">Medir este filtro</button>
+        <label class="campo inline">Período da medição
+          <select id="espacoPeriodo">
+            <option value="0">todos os concursos</option>
+            <option value="100">últimos 100</option>
+            <option value="300">últimos 300</option>
+            <option value="1000">últimos 1000</option>
+          </select>
+        </label>
       </div>
+      <p class="nota" id="notaEspaco"></p>
+    </div>
+  </div>
+
+  <!-- ------------------- medição do espaço filtrado ------------------- -->
+  <div class="caixa" id="caixaMedicaoEspaco" hidden>
+    <h2>O que estes filtros fazem</h2>
+
+    <div class="aviso-honesto">
+      <em>Leia antes do resultado.</em> Para qualquer bilhete de 15 dezenas, a
+      distribuição de acertos é exatamente a mesma — ela depende de quantas
+      dezenas o bilhete tem, não de quais. Então a média de acertos do espaço
+      filtrado é igual à do espaço inteiro, sempre, por teorema. Esta tela existe
+      para você <b>ver isso acontecer com os seus filtros</b> e para separar o que
+      é efeito real do que é ruído dos concursos que existiram.
+    </div>
+
+    <p class="nota" id="progressoEspaco"></p>
+    <div class="botoes" id="botoesEspaco" hidden>
+      <button class="btn fantasma" id="btnCancelarEspaco">Cancelar</button>
+    </div>
+
+    <div id="corpoEspaco" hidden>
+      <div id="vereditoEspaco"></div>
+      <p class="nota" id="resumoEspaco"></p>
+      <!-- A rolagem é do container, nunca da página: item de grade tem
+           min-width:auto e um filho largo empurra a coluna inteira, fazendo
+           o app rolar de lado no celular. -->
+      <div class="rolagem"><table class="tabela duelo" id="tabelaEspaco"></table></div>
+      <p class="conclusao" id="conclusaoEspaco"></p>
     </div>
   </div>
 

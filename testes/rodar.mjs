@@ -12,7 +12,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PORTA, RAIZ } from './ajuda.mjs';
 import * as ajuda from './ajuda.mjs';
 
@@ -73,7 +73,16 @@ const resultados = [];
 for (const arq of aRodar) {
   console.log(`\n▸ ${arq}`);
   try {
-    const mod = await import(path.join(AQUI, arq));
+    /* `pathToFileURL` e não o caminho cru: no Windows, `path.join` devolve
+       algo como C:\...\testes\espaco.teste.mjs, e o carregador de ES Modules
+       do Node recusa isso com "Only URLs with a scheme in: file, data, and
+       node are supported. Received protocol 'c:'" — ele lê o C: como se
+       fosse um protocolo. No Linux e no macOS o caminho cru passa, que é
+       por que este defeito atravessou a suíte inteira sem aparecer: ela
+       nunca tinha rodado no Windows, justamente a máquina onde o Ademir
+       desenvolve. Teste que não roda na máquina de quem programa é teste
+       que não existe. */
+    const mod = await import(pathToFileURL(path.join(AQUI, arq)).href);
     resultados.push(await mod.default());
   } catch (e) {
     const linha = e.message.split('\n')[0];
